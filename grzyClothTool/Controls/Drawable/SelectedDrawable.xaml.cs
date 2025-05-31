@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using static grzyClothTool.Controls.CustomMessageBox;
@@ -108,6 +109,40 @@ namespace grzyClothTool.Controls
             }
         }
 
+        private void TextureListBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Check for Ctrl+I key combination
+            if (e.Key == Key.I && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                ListBox listBox = sender as ListBox;
+                if (listBox?.Items == null || listBox.Items.Count == 0)
+                    return;
+
+                // Get currently selected items
+                var currentlySelected = new HashSet<object>(listBox.SelectedItems.Cast<object>());
+                
+                // Clear current selection
+                listBox.SelectedItems.Clear();
+                
+                // Select all items that were NOT previously selected
+                foreach (var item in listBox.Items)
+                {
+                    if (!currentlySelected.Contains(item))
+                    {
+                        listBox.SelectedItems.Add(item);
+                    }
+                }
+
+                // Update our properties
+                SelectedTxt = listBox.SelectedItem as GTexture;
+                SelectedTextures = listBox.SelectedItems.Cast<GTexture>().ToList();
+                
+                // Mark the event as handled to prevent further processing
+                e.Handled = true;
+                
+                LogHelper.Log("Texture selection inverted with Ctrl+I", LogType.Info);
+            }
+        }
 
         private void TexturePreview_Click(object sender, RoutedEventArgs e)
         {

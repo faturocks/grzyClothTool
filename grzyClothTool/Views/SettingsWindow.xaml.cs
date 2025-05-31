@@ -3,6 +3,7 @@ using grzyClothTool.Helpers;
 using grzyClothTool.Models;
 using grzyClothTool.Models.Drawable;
 using grzyClothTool.Models.Other;
+using grzyClothTool.Models.Texture;
 using grzyClothTool.Views;
 using Microsoft.Win32;
 using System;
@@ -257,6 +258,76 @@ namespace grzyClothTool.Views
             }
         }
 
+        public void DeleteUnoptimizedTextures_Click(object sender, RoutedEventArgs e)
+        {
+            // Show texture deletion criteria dialog
+            var textureDeletionDialog = new TextureDeletionDialog();
+            var result = textureDeletionDialog.ShowDialog();
+            
+            if (result != true) // User cancelled
+                return;
+
+            var selectedCriteria = textureDeletionDialog.SelectedCriteria;
+
+            // Show category selection dialog
+            var includedCategories = ShowCategorySelectionDialog();
+            if (includedCategories == null) // User cancelled
+                return;
+
+            var drawablesToDelete = new List<GDrawable>();
+
+            // Find all drawables with textures matching the selected criteria
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                foreach (var drawable in addon.Drawables)
+                {
+                    // Skip if drawable category is not included
+                    if (!ShouldIncludeCategory(drawable, includedCategories))
+                        continue;
+
+                    // Skip reserved drawables
+                    if (drawable.IsReserved)
+                        continue;
+
+                    // Check if any texture matches the selected criteria
+                    bool shouldDelete = false;
+                    foreach (var texture in drawable.Textures)
+                    {
+                        if (texture.TxtDetails != null && DoesTextureMatchCriteria(texture, selectedCriteria))
+                        {
+                            shouldDelete = true;
+                            break;
+                        }
+                    }
+
+                    if (shouldDelete)
+                    {
+                        drawablesToDelete.Add(drawable);
+                    }
+                }
+            }
+
+            if (drawablesToDelete.Count == 0)
+            {
+                CustomMessageBox.Show("No models with textures matching the selected criteria found.", "Delete Unoptimized Textures", CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            var criteriaText = string.Join(", ", selectedCriteria);
+            var message = $"Found {drawablesToDelete.Count} model(s) with textures matching the criteria: {criteriaText}.\n\n" +
+                         "Included categories: " + string.Join(", ", includedCategories) + "\n\n" +
+                         "Do you want to delete these models?";
+
+            var confirmResult = CustomMessageBox.Show(message, "Delete Unoptimized Textures", CustomMessageBoxButtons.YesNo);
+            if (confirmResult == CustomMessageBoxResult.Yes)
+            {
+                MainWindow.AddonManager.DeleteDrawables(drawablesToDelete, true);
+                RecalculateAddonSeparation();
+                SaveHelper.SetUnsavedChanges(true);
+                LogHelper.Log($"Deleted {drawablesToDelete.Count} model(s) with unoptimized textures matching criteria: {criteriaText}.", LogType.Info);
+            }
+        }
+
         private bool IsNormalOrSpecularTexture(string textureName)
         {
             if (string.IsNullOrEmpty(textureName))
@@ -274,6 +345,49 @@ namespace grzyClothTool.Views
                 lowerName.Contains("_gloss") || lowerName.Contains("_rough") || lowerName.Contains("_met"))
                 return true;
                 
+            return false;
+        }
+
+        private bool DoesTextureMatchCriteria(GTexture texture, List<string> criteria)
+        {
+            var details = texture.TxtDetails;
+            if (details == null)
+                return false;
+
+            int width = details.Width;
+            int height = details.Height;
+
+            foreach (var criterion in criteria)
+            {
+                switch (criterion)
+                {
+                    case "2048x4096":
+                        if ((width == 2048 && height == 4096) || (width == 4096 && height == 2048))
+                            return true;
+                        break;
+
+                    case "1024x2048":
+                        if ((width == 1024 && height == 2048) || (width == 2048 && height == 1024))
+                            return true;
+                        break;
+
+                    case "pixel>2048":
+                        if (width > 2048 || height > 2048)
+                            return true;
+                        break;
+
+                    case "aspectratio1:2or2:1":
+                        double aspectRatio = (double)width / height;
+                        if (Math.Abs(aspectRatio - 0.5) < 0.01 || Math.Abs(aspectRatio - 2.0) < 0.01) // 1:2 or 2:1
+                        {
+                            // Exclude 1:1 aspect ratio (square textures)
+                            if (Math.Abs(aspectRatio - 1.0) >= 0.01)
+                                return true;
+                        }
+                        break;
+                }
+            }
+
             return false;
         }
 

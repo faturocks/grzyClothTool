@@ -212,6 +212,7 @@
                                             Style="{StaticResource FixedListBox}"
                                             x:Name="TextureListBox"
                                             SelectionChanged="TextureListBox_SelectionChanged"
+                                            KeyDown="TextureListBox_KeyDown"
                                             BorderBrush="{DynamicResource Brush200}"
                                             Background="Transparent"
                                             Foreground="{DynamicResource Brush950}"
