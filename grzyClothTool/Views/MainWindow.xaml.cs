@@ -7,7 +7,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Navigation;
 using static grzyClothTool.Enums;
+using System.Text.Json;
 
 namespace grzyClothTool
 {
@@ -30,12 +30,6 @@ namespace grzyClothTool
 
         private static AddonManager _addonManager;
         public static AddonManager AddonManager => _addonManager;
-
-        private readonly static Dictionary<string, string> TempFoldersNames = new()
-        {
-            { "import", "grzyClothTool_import" },
-            { "export", "grzyClothTool_export" }
-        };
 
         public MainWindow()
         {
@@ -55,8 +49,6 @@ namespace grzyClothTool
             DataContext = _navigationHelper;
             _navigationHelper.Navigate("Home");
             version.Header = "Version: " + UpdateHelper.GetCurrentVersion();
-
-            TempFoldersCleanup();
 
             FileHelper.GenerateReservedAssets();
             LogHelper.Init();
@@ -192,110 +184,112 @@ namespace grzyClothTool
             }
         }
 
-        private void ImportProject_Click(object sender, RoutedEventArgs e)
+        private async void LoadProject_Click(object sender, RoutedEventArgs e)
         {
-            _ = ImportProjectAsync();
+            bool success = await LoadProjectAsync();
+            if (success)
+            {
+                // Auto-navigate to Project window if loaded from main menu
+                NavigationHelper.Navigate("Project");
+            }
         }
 
-        public async Task ImportProjectAsync(bool shouldSetProjectName = false)
+        public async Task<bool> LoadProjectAsync(bool shouldSetProjectName = false)
         {
+            if (!SaveHelper.CheckUnsavedChangesMessage())
+            {
+                return false;
+            }
 
-            // open file dialog to select project file
             OpenFileDialog openFileDialog = new()
             {
-                Title = "Import project",
+                Title = "Load project",
                 Filter = "grzyClothTool project (*.gctproject)|*.gctproject"
             };
 
             if (openFileDialog.ShowDialog() == true)
             {
-                ProgressHelper.Start($"Started importing {openFileDialog.SafeFileName}");
+                // Disable auto-saving during project load to avoid conflicts
+                SaveHelper.SavingPaused = true;
+                ProgressHelper.Start($"Loading {openFileDialog.SafeFileName}");
 
-                var tempPath = Path.Combine(Path.GetTempPath(), TempFoldersNames["import"]);
-                Directory.CreateDirectory(tempPath);
-
-                var selectedPath = openFileDialog.FileName;
-                var projectName = Path.GetFileNameWithoutExtension(selectedPath);
-
-                if (shouldSetProjectName)
+                try
                 {
-                    AddonManager.ProjectName = projectName;
+                    var json = await File.ReadAllTextAsync(openFileDialog.FileName);
+                    var addonManager = JsonSerializer.Deserialize<AddonManager>(json, SaveHelper.SerializerOptions);
+
+                    // Set project name from loaded data or filename
+                    if (shouldSetProjectName)
+                    {
+                        if (!string.IsNullOrWhiteSpace(addonManager.ProjectName))
+                        {
+                            AddonManager.ProjectName = addonManager.ProjectName;
+                        }
+                        else
+                        {
+                            // Use filename as project name if not set in the project data
+                            AddonManager.ProjectName = Path.GetFileNameWithoutExtension(openFileDialog.FileName);
+                        }
+                    }
+
+                    // Clear existing addons and load from project
+                    AddonManager.Addons.Clear();
+                    foreach (var addon in addonManager.Addons)
+                    {
+                        AddonManager.Addons.Add(addon);
+                    }
+
+                    // Show warning message about loaded project
+                    var projectName = !string.IsNullOrWhiteSpace(AddonManager.ProjectName) ? AddonManager.ProjectName : "Unnamed Project";
+                    LogHelper.Log($"Project '{projectName}' loaded successfully! Auto-save has been resumed.", Views.LogType.Warning);
+                    
+                    ProgressHelper.Stop("Project loaded in {0}", true);
+                    SaveHelper.SetUnsavedChanges(true);
+                    
+                    return true; // Success
                 }
-
-                var buildPath = Path.Combine(tempPath, projectName + "_" + DateTime.UtcNow.Ticks.ToString());
-
-                var zipPath = Path.Combine(tempPath, $"{projectName}.zip");
-
-                await ObfuscationHelper.XORFile(selectedPath, zipPath);
-                await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, buildPath));
-
-                if (File.Exists(zipPath))
+                catch (Exception ex)
                 {
-                    //delete zip after extract
-                    File.Delete(zipPath);
+                    LogHelper.Log($"Error loading project: {ex.Message}", Views.LogType.Warning);
+                    ProgressHelper.Stop("Failed to load project", false);
+                    return false; // Failure
                 }
-
-                var metaFiles = Directory.GetFiles(buildPath, "*.meta", SearchOption.TopDirectoryOnly)
-                         .Where(file => file.Contains("mp_m_freemode") || file.Contains("mp_f_freemode"))
-                         .ToList();
-
-                if (metaFiles.Count == 0)
+                finally
                 {
-                    LogHelper.Log("No meta files found in project file, this shouldn't happen, please report it to developer on discord");
-                    return;
+                    // Re-enable auto-saving
+                    SaveHelper.SavingPaused = false;
                 }
-
-                foreach (var metaFile in metaFiles)
-                {
-                    await AddonManager.LoadAddon(metaFile);
-                }
-
-                ProgressHelper.Stop("Project imported in {0}", true);
-                SaveHelper.SetUnsavedChanges(true);
             }
+
+            return false; // User cancelled
         }
 
-        private async void ExportProject_Click(object sender, RoutedEventArgs e)
+        private async void SaveProject_Click(object sender, RoutedEventArgs e)
         {
-            // As export we can build current project as a fivem resource, because fivem is most common and it's easy to load it later
-            // Then zip it and save it as a project file
-
             var savedProjectName = string.IsNullOrWhiteSpace(AddonManager.ProjectName) ? "project" : AddonManager.ProjectName;
             SaveFileDialog saveFileDialog = new()
             {
-                Title = "Export project",
+                Title = "Save project",
                 Filter = "grzyClothTool project (*.gctproject)|*.gctproject",
                 FileName = $"{savedProjectName}.gctproject"
             };
 
             if (saveFileDialog.ShowDialog() == true)
             {
-                ProgressHelper.Start("Started exporting project");
+                ProgressHelper.Start("Saving project");
 
-                var tempPath = Path.Combine(Path.GetTempPath(), TempFoldersNames["export"]);
-
-                var selectedPath = saveFileDialog.FileName;
-                var projectName = Path.GetFileNameWithoutExtension(selectedPath);
-                var buildPath = Path.Combine(tempPath, projectName);
-
-                var bHelper = new BuildResourceHelper(projectName, buildPath, new Progress<int>(), BuildResourceType.FiveM, false);
-                await bHelper.BuildFiveMResource();
-
-                var zipPath = Path.Combine(tempPath, $"{projectName}.zip");
-
-                if (File.Exists(zipPath))
+                try
                 {
-                    File.Delete(zipPath);
+                    var json = JsonSerializer.Serialize(AddonManager, SaveHelper.SerializerOptions);
+                    await File.WriteAllTextAsync(saveFileDialog.FileName, json);
+
+                    ProgressHelper.Stop("Project saved in {0}", true);
                 }
-                if (File.Exists(selectedPath))
+                catch (Exception ex)
                 {
-                    File.Delete(selectedPath);
+                    LogHelper.Log($"Error saving project: {ex.Message}", Views.LogType.Warning);
+                    ProgressHelper.Stop("Failed to save project", false);
                 }
-
-                await Task.Run(() => ZipFile.CreateFromDirectory(buildPath, zipPath, CompressionLevel.Fastest, false));
-                await ObfuscationHelper.XORFile(zipPath, selectedPath);
-
-                ProgressHelper.Stop("Project exported in {0}", true);
             }
         }
 
@@ -328,20 +322,6 @@ namespace grzyClothTool
         private void LogsOpen_Click(object sender, RoutedEventArgs e)
         {
             LogHelper.OpenLogWindow();
-        }
-
-        private static void TempFoldersCleanup()
-        {
-            // At the start of app we can remove temp folders from previous session
-
-            foreach (var tempName in TempFoldersNames.Values)
-            {
-                var tempPath = Path.Combine(Path.GetTempPath(), tempName);
-                if (Directory.Exists(tempPath))
-                {
-                    Directory.Delete(tempPath, true);
-                }
-            }
         }
     }
 }

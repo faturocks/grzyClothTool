@@ -67,6 +67,20 @@ namespace grzyClothTool.Views
                 }
             }
         }
+
+        private bool _generateMipmaps;
+        public bool GenerateMipmaps
+        {
+            get => _generateMipmaps;
+            set
+            {
+                if (_generateMipmaps != value)
+                {
+                    _generateMipmaps = value;
+                    OnPropertyChanged(nameof(GenerateMipmaps));
+                }
+            }
+        }
         public string BuildPath { get; set; }
 
         private BuildResourceType _resourceType;
@@ -144,7 +158,7 @@ namespace grzyClothTool.Views
                 timer.Start();
 
                 var progress = new Progress<int>(value => ProgressValue += value);
-                var buildHelper = new BuildResourceHelper(ProjectName, BuildPath, progress, _resourceType, SplitAddons);
+                var buildHelper = new BuildResourceHelper(ProjectName, BuildPath, progress, _resourceType, SplitAddons, GenerateMipmaps);
 
                 await Task.Run(() => BuildResource(buildHelper)); // moved out of ui thread, so users don't think tool stopped responding
 

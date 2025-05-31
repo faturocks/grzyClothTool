@@ -13,6 +13,7 @@
     <UserControl.Resources>
         <ContextMenu x:Key="SingleSelectionContextMenu">
             <MenuItem IsEnabled="False" Header="Optimize embedded textures" Click="OptimizeTexture_Click" />
+            <MenuItem Header="Optimize textures" Click="OptimizeDrawableTextures_Click" />
             <MenuItem Header="Delete" Click="DeleteDrawable_Click" />
             <MenuItem Header="Replace" Click="ReplaceDrawable_Click" />
             <MenuItem Header="Move" ItemsSource="{Binding AddonManager.MoveMenuItems, RelativeSource={RelativeSource AncestorType=Window}}">
@@ -31,6 +32,7 @@
             <MenuItem Header="Export only textures as PNG" Click="ExportDrawable_Click" Tag="PNG" />
         </ContextMenu>
         <ContextMenu x:Key="MultipleSelectionContextMenu">
+            <MenuItem Header="Optimize textures" Click="OptimizeDrawableTextures_Click" />
             <MenuItem Header="Delete" Click="DeleteDrawable_Click" />
             <MenuItem Header="Move" ItemsSource="{Binding AddonManager.MoveMenuItems, RelativeSource={RelativeSource AncestorType=Window}}">
                 <MenuItem.ItemContainerStyle>
@@ -63,7 +65,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border Background="Transparent" x:Name="Border" BorderBrush="{DynamicResource Brush600}" BorderThickness="1" Padding="0, 5, 0, 5" Margin="0,2,2,2" CornerRadius="5">
+                        <Border Background="Transparent" x:Name="Border" BorderBrush="{DynamicResource Brush600}" BorderThickness="1" Padding="0, 5, 0, 5" Margin="0,2,2,2" CornerRadius="5" 
+                                MouseEnter="Border_MouseEnter" MouseLeave="Border_MouseLeave">
                             <Grid >
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="4"/>
@@ -102,19 +105,8 @@
                                             </Style>
                                         </icons:MaterialIcon.Style>
                                     </icons:MaterialIcon>
-                                    <ContentControl ToolTip="{Binding Details.Tooltip}" ToolTipService.InitialShowDelay="0">
-                                        <icons:MaterialIcon Kind="AlertCircleOutline" Width="12" Margin="5,1,0,0">
-                                            <icons:MaterialIcon.Style>
-                                                <Style TargetType="{x:Type icons:MaterialIcon}">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding Details.IsWarning}" Value="True">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </icons:MaterialIcon.Style>
-                                        </icons:MaterialIcon>
+                                    <ContentControl ToolTipService.InitialShowDelay="0">
+                                        <icons:MaterialIcon x:Name="WarningIcon" Kind="AlertCircleOutline" Width="12" Margin="5,1,0,0" Visibility="Collapsed" />
                                     </ContentControl>
                                     <TextBlock Padding="5, 0, 0, 0" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"></TextBlock>
                                 </StackPanel>

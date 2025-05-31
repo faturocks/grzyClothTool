@@ -182,6 +182,12 @@ namespace grzyClothTool.Models
 
             Regex alternateRegex = new(@"_\w_\d+\.ydd$");
             Regex physicsRegex = new(@"\.yld$");
+            
+            // Pre-filter files and group them by type for better processing
+            var regularDrawables = new List<(string filePath, bool isProp, int drawableType)>();
+            var alternateFiles = new List<string>();
+            var physicsFiles = new List<string>();
+
             foreach (var filePath in filePaths)
             {
                 var (isProp, drawableType) = FileHelper.ResolveDrawableType(filePath);
@@ -190,113 +196,149 @@ namespace grzyClothTool.Models
                     continue;
                 }
 
-                if(Addons.Count == 0)
-                {
-                    CreateAddon();
-                }
-
-                // Start from the first Addon
-                var currentAddonIndex = 0;
-                Addon currentAddon = Addons[currentAddonIndex];
-
-                // Calculate countOfType for the current Addon
-                var drawablesOfType = currentAddon.Drawables.Where(x => x.TypeNumeric == drawableType && x.IsProp == isProp && x.Sex == sex);
-                var countOfType = drawablesOfType.Count();
-
                 if (alternateRegex.IsMatch(filePath))
                 {
-                    if (filePath.EndsWith("_1.ydd")) {
-                        // Add only first alternate variation as first person file
-
-                        var number = FileHelper.GetDrawableNumberFromFileName(Path.GetFileName(filePath));
-                        if (number == null)
-                        {
-                            LogHelper.Log($"Could not find associated YDD file for first person file: {filePath}, please do it manually", Views.LogType.Warning);
-                            continue;
-                        }
-
-                        var foundDrawable = drawablesOfType.FirstOrDefault(x => x.Number == number);
-                        if (foundDrawable != null)
-                        {
-                            foundDrawable.FirstPersonPath = filePath;
-                        }
-                    }
-
-                    // Skip all other alternate variations (_2, _3, etc.)
+                    alternateFiles.Add(filePath);
                     continue;
                 }
 
                 if (physicsRegex.IsMatch(filePath))
                 {
+                    physicsFiles.Add(filePath);
+                    continue;
+                }
+
+                regularDrawables.Add((filePath, isProp, drawableType));
+            }
+
+            if(Addons.Count == 0)
+            {
+                CreateAddon();
+            }
+
+            // Process regular drawables concurrently in batches
+            const int batchSize = 4; // Process 4 at a time to avoid overwhelming the system
+            var drawableTasks = new List<Task<GDrawable>>();
+            var currentAddon = Addons[0];
+
+            for (int i = 0; i < regularDrawables.Count; i += batchSize)
+            {
+                var batch = regularDrawables.Skip(i).Take(batchSize);
+                var batchTasks = batch.Select(async item =>
+                {
+                    var (filePath, isProp, drawableType) = item;
+                    var drawablesOfType = currentAddon.Drawables.Where(x => x.TypeNumeric == drawableType && x.IsProp == isProp && x.Sex == sex);
+                    var countOfType = drawablesOfType.Count();
+
+                    var drawable = await Task.Run(() => FileHelper.CreateDrawableAsync(filePath, sex, isProp, drawableType, countOfType));
+
+                    // Set properties from ymt file if available
+                    if (ymt is not null)
+                    {
+                        // Update the dictionary with the count of the current TypeNumeric
+                        var key = (drawableType, isProp);
+                        lock (typeNumericCounts)
+                        {
+                            if (typeNumericCounts.TryGetValue(key, out int value))
+                            {
+                                typeNumericCounts[key] = ++value;
+                            }
+                            else
+                            {
+                                typeNumericCounts[key] = 1;
+                            }
+                        }
+
+                        var ymtKey = (drawable.TypeNumeric, typeNumericCounts[(drawable.TypeNumeric, drawable.IsProp)] - 1);
+                        if (compInfoDict.TryGetValue(ymtKey, out MCComponentInfo compInfo))
+                        {
+                            drawable.Audio = compInfo.Data.pedXml_audioID.ToString();
+
+                            var list = EnumHelper.GetFlags((int)compInfo.Data.flags);
+                            drawable.SelectedFlags = list.ToObservableCollection();
+
+                            if (compInfo.Data.pedXml_expressionMods.f4 != 0)
+                            {
+                                drawable.EnableHighHeels = true;
+                                drawable.HighHeelsValue = compInfo.Data.pedXml_expressionMods.f4;
+                            }
+                        }
+
+                        if (drawable.IsProp)
+                        {
+                            if (pedPropMetaDataDict.TryGetValue(ymtKey, out MCPedPropMetaData pedPropMetaData))
+                            {
+                                drawable.Audio = pedPropMetaData.Data.audioId.ToString();
+                                drawable.RenderFlag = pedPropMetaData.Data.renderFlags.ToString();
+
+                                var list = EnumHelper.GetFlags((int)pedPropMetaData.Data.propFlags);
+                                drawable.SelectedFlags = list.ToObservableCollection();
+
+                                if (pedPropMetaData.Data.expressionMods.f0 != 0)
+                                {
+                                    drawable.EnableHairScale = true;
+
+                                    // grzyClothTool saves hairScaleValue as positive number, on resource build it makes it negative
+                                    drawable.HairScaleValue = Math.Abs(pedPropMetaData.Data.expressionMods.f0);
+                                }
+                            }
+                        }
+                    }
+
+                    return drawable;
+                });
+
+                drawableTasks.AddRange(batchTasks);
+                
+                // Process batch and add drawables
+                var completedDrawables = await Task.WhenAll(batchTasks);
+                foreach (var drawable in completedDrawables)
+                {
+                    AddDrawable(drawable);
+                }
+            }
+
+            // Process alternate files after main drawables are loaded
+            foreach (var filePath in alternateFiles)
+            {
+                var (isProp, drawableType) = FileHelper.ResolveDrawableType(filePath);
+                var drawablesOfType = currentAddon.Drawables.Where(x => x.TypeNumeric == drawableType && x.IsProp == isProp && x.Sex == sex);
+
+                if (filePath.EndsWith("_1.ydd")) {
+                    // Add only first alternate variation as first person file
                     var number = FileHelper.GetDrawableNumberFromFileName(Path.GetFileName(filePath));
                     if (number == null)
                     {
-                        LogHelper.Log($"Could not find associated YDD file for this YLD: {filePath}, please do it manually", Views.LogType.Warning);
+                        LogHelper.Log($"Could not find associated YDD file for first person file: {filePath}, please do it manually", Views.LogType.Warning);
                         continue;
                     }
 
                     var foundDrawable = drawablesOfType.FirstOrDefault(x => x.Number == number);
                     if (foundDrawable != null)
                     {
-                        foundDrawable.ClothPhysicsPath = filePath;
+                        foundDrawable.FirstPersonPath = filePath;
                     }
+                }
+            }
 
+            // Process physics files after main drawables are loaded
+            foreach (var filePath in physicsFiles)
+            {
+                var (isProp, drawableType) = FileHelper.ResolveDrawableType(filePath);
+                var drawablesOfType = currentAddon.Drawables.Where(x => x.TypeNumeric == drawableType && x.IsProp == isProp && x.Sex == sex);
+
+                var number = FileHelper.GetDrawableNumberFromFileName(Path.GetFileName(filePath));
+                if (number == null)
+                {
+                    LogHelper.Log($"Could not find associated YDD file for this YLD: {filePath}, please do it manually", Views.LogType.Warning);
                     continue;
                 }
 
-                var drawable = await Task.Run(() => FileHelper.CreateDrawableAsync(filePath, sex, isProp, drawableType, countOfType));
-
-                // Set properties from ymt file if available
-                if (ymt is not null)
+                var foundDrawable = drawablesOfType.FirstOrDefault(x => x.Number == number);
+                if (foundDrawable != null)
                 {
-                    // Update the dictionary with the count of the current TypeNumeric
-                    var key = (drawableType, isProp);
-                    if (typeNumericCounts.TryGetValue(key, out int value))
-                    {
-                        typeNumericCounts[key] = ++value;
-                    }
-                    else
-                    {
-                        typeNumericCounts[key] = 1;
-                    }
-
-                    var ymtKey = (drawable.TypeNumeric, typeNumericCounts[(drawable.TypeNumeric, drawable.IsProp)] - 1);
-                    if (compInfoDict.TryGetValue(ymtKey, out MCComponentInfo compInfo))
-                    {
-                        drawable.Audio = compInfo.Data.pedXml_audioID.ToString();
-
-                        var list = EnumHelper.GetFlags((int)compInfo.Data.flags);
-                        drawable.SelectedFlags = list.ToObservableCollection();
-
-                        if (compInfo.Data.pedXml_expressionMods.f4 != 0)
-                        {
-                            drawable.EnableHighHeels = true;
-                            drawable.HighHeelsValue = compInfo.Data.pedXml_expressionMods.f4;
-                        }
-                    }
-
-                    if (drawable.IsProp)
-                    {
-                        if (pedPropMetaDataDict.TryGetValue(ymtKey, out MCPedPropMetaData pedPropMetaData))
-                        {
-                            drawable.Audio = pedPropMetaData.Data.audioId.ToString();
-                            drawable.RenderFlag = pedPropMetaData.Data.renderFlags.ToString();
-
-                            var list = EnumHelper.GetFlags((int)pedPropMetaData.Data.propFlags);
-                            drawable.SelectedFlags = list.ToObservableCollection();
-
-                            if (pedPropMetaData.Data.expressionMods.f0 != 0)
-                            {
-                                drawable.EnableHairScale = true;
-
-                                // grzyClothTool saves hairScaleValue as positive number, on resource build it makes it negative
-                                drawable.HairScaleValue = Math.Abs(pedPropMetaData.Data.expressionMods.f0);
-                            }
-                        }
-                    }
+                    foundDrawable.ClothPhysicsPath = filePath;
                 }
-
-                AddDrawable(drawable);
             }
 
             Addons.Sort(true);
@@ -350,30 +392,128 @@ namespace grzyClothTool.Models
 
         public void DeleteDrawables(List<GDrawable> drawables)
         {
+            DeleteDrawables(drawables, false);
+        }
+
+        public void DeleteDrawables(List<GDrawable> drawables, bool searchAcrossAllAddons)
+        {
             SaveHelper.SetUnsavedChanges(true);
-            var addon = SelectedAddon;
-            foreach (GDrawable drawable in drawables)
+            
+            if (searchAcrossAllAddons)
             {
-                addon.Drawables.Remove(drawable);
-
-                if (SettingsHelper.Instance.AutoDeleteFiles)
+                // Group drawables by their containing addon for efficient processing
+                var drawablesByAddon = new Dictionary<Addon, List<GDrawable>>();
+                var drawablesNotFound = new List<GDrawable>();
+                
+                foreach (var drawable in drawables)
                 {
-                    foreach (var texture in drawable.Textures)
+                    var containingAddon = Addons.FirstOrDefault(a => a.Drawables.Contains(drawable));
+                    if (containingAddon != null)
                     {
-                        File.Delete(texture.FilePath);
+                        if (!drawablesByAddon.ContainsKey(containingAddon))
+                        {
+                            drawablesByAddon[containingAddon] = new List<GDrawable>();
+                        }
+                        drawablesByAddon[containingAddon].Add(drawable);
                     }
-                    File.Delete(drawable.FilePath);
+                    else
+                    {
+                        drawablesNotFound.Add(drawable);
+                    }
                 }
+                
+                // Log any drawables that couldn't be found
+                if (drawablesNotFound.Count > 0)
+                {
+                    LogHelper.Log($"Warning: {drawablesNotFound.Count} drawable(s) were not found in any addon and could not be deleted.", Views.LogType.Warning);
+                }
+                
+                // Remove drawables from their respective addons
+                var addonsToRemove = new List<Addon>();
+                int totalDeleted = 0;
+                
+                foreach (var kvp in drawablesByAddon)
+                {
+                    var addon = kvp.Key;
+                    var addonDrawables = kvp.Value;
+                    
+                    foreach (var drawable in addonDrawables)
+                    {
+                        if (addon.Drawables.Remove(drawable))
+                        {
+                            totalDeleted++;
+                            
+                            if (SettingsHelper.Instance.AutoDeleteFiles)
+                            {
+                                try
+                                {
+                                    foreach (var texture in drawable.Textures)
+                                    {
+                                        if (File.Exists(texture.FilePath))
+                                        {
+                                            File.Delete(texture.FilePath);
+                                        }
+                                    }
+                                    if (File.Exists(drawable.FilePath))
+                                    {
+                                        File.Delete(drawable.FilePath);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogHelper.Log($"Warning: Could not delete files for drawable {drawable.Name}: {ex.Message}", Views.LogType.Warning);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort the addon after removal
+                    if (addon.Drawables.Count > 0)
+                    {
+                        addon.Drawables.Sort(true);
+                    }
+                    else
+                    {
+                        // Mark empty addons for removal
+                        addonsToRemove.Add(addon);
+                    }
+                }
+                
+                // Remove empty addons
+                foreach (var addon in addonsToRemove)
+                {
+                    DeleteAddon(addon);
+                }
+                
+                LogHelper.Log($"Successfully deleted {totalDeleted} drawable(s) across {drawablesByAddon.Count} addon(s).", Views.LogType.Info);
             }
-
-            // if addon is empty, remove it
-            if (addon.Drawables.Count == 0)
+            else
             {
-                DeleteAddon(addon);
-                return;
-            }
+                // Original logic: only delete from selected addon
+                var addon = SelectedAddon;
+                foreach (GDrawable drawable in drawables)
+                {
+                    addon.Drawables.Remove(drawable);
 
-            addon.Drawables.Sort(true);
+                    if (SettingsHelper.Instance.AutoDeleteFiles)
+                    {
+                        foreach (var texture in drawable.Textures)
+                        {
+                            File.Delete(texture.FilePath);
+                        }
+                        File.Delete(drawable.FilePath);
+                    }
+                }
+
+                // if addon is empty, remove it
+                if (addon.Drawables.Count == 0)
+                {
+                    DeleteAddon(addon);
+                    return;
+                }
+
+                addon.Drawables.Sort(true);
+            }
         }
 
         public void MoveDrawable(GDrawable drawable, Addon targetAddon)

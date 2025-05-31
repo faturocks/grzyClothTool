@@ -62,6 +62,44 @@ public class GDrawableDetails : INotifyPropertyChanged
         }
     }
 
+    // New property for detailed polygon information
+    public string PolygonCountInfo
+    {
+        get
+        {
+            var info = new List<string>();
+            
+            foreach (var detailLevel in AllModels.Keys)
+            {
+                var model = AllModels[detailLevel];
+                if (model != null)
+                {
+                    int polygonLimit = detailLevel switch
+                    {
+                        DetailLevel.High => SettingsHelper.Instance.PolygonLimitHigh,
+                        DetailLevel.Med => SettingsHelper.Instance.PolygonLimitMed,
+                        DetailLevel.Low => SettingsHelper.Instance.PolygonLimitLow,
+                        _ => 0
+                    };
+                    
+                    var status = model.PolyCount > polygonLimit ? " ⚠️" : " ✓";
+                    info.Add($"{detailLevel}: {model.PolyCount:N0} / {polygonLimit:N0}{status}");
+                }
+                else
+                {
+                    info.Add($"{detailLevel}: Missing");
+                }
+            }
+            
+            if (info.Count == 0)
+            {
+                return "Loading polygon information...";
+            }
+            
+            return string.Join("\n", info);
+        }
+    }
+
     public void Validate()
     {
         // reset values

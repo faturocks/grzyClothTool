@@ -189,10 +189,13 @@ namespace grzyClothTool.Views
             MainWindow.NavigationHelper.Navigate("Project");
         }
 
-        private async void ImportProject_Click(object sender, RoutedEventArgs e)
+        private async void LoadProject_Click(object sender, RoutedEventArgs e)
         {
-            await MainWindow.Instance.ImportProjectAsync(true);
-            MainWindow.NavigationHelper.Navigate("Project");
+            bool success = await MainWindow.Instance.LoadProjectAsync(true);
+            if (success)
+            {
+                MainWindow.NavigationHelper.Navigate("Project");
+            }
         }
 
         private void Close_Click(object sender, RoutedEventArgs e)

@@ -131,6 +131,22 @@
                             <c:SettingsLabelCheckBox Margin="5" Label="Display drawable path" Text="Enabled will display used path for selected drawable" IsChecked="{Binding Path=Instance.DisplaySelectedDrawablePath, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" />
                             <c:SettingsLabelCheckBox Margin="5" Label="Delete drawable files automatically" Text="When enabled, it will automatically remove the associated files from your system when you delete a drawable from the addon" DisplayWarning="WARNING: This function will modify and remove files from your PC. Any removed files cannot be recovered.&#x0a;&#x0a;Are you sure you want to enable it?" IsChecked="{Binding Path=Instance.AutoDeleteFiles, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" />
                             <c:SettingsLabelCheckBox Margin="5" Label="Mark new drawables" Text="When enabled, new drawables will be marked with a yellow dot" IsChecked="{Binding Path=Instance.MarkNewDrawables, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" />
+                            
+                            <GroupBox Margin="0,5" Style="{DynamicResource FixedGroupBox}">
+                                <GroupBox.Header>
+                                    <TextBlock FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Brush950}" Text="LOD Management" />
+                                </GroupBox.Header>
+                                <StackPanel Margin="5">
+                                    <TextBlock Padding="0,0,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Delete all models that are missing Medium and Low LOD models. This will help clean up incomplete models.</TextBlock>
+                                    <c:CustomButton Label="DELETE MODELS MISSING MED/LOW LOD" Padding="10" CornerRadius="5" MyBtnClickEvent="DeleteMissingLOD_Click" />
+                                    
+                                    <TextBlock Padding="0,10,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Delete models where highest LOD exceeds the High LOD polygon limit (35000 by default).</TextBlock>
+                                    <c:CustomButton Label="DELETE HIGH POLYGON MODELS" Padding="10" CornerRadius="5" MyBtnClickEvent="DeleteHighPolygonModels_Click" />
+                                    
+                                    <TextBlock Padding="0,10,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Delete models that don't have a base diffuse texture (excluding Normal and Specular maps).</TextBlock>
+                                    <c:CustomButton Label="REMOVE MODELS WITH MISSING BASE TEXTURE" Padding="10" CornerRadius="5" MyBtnClickEvent="DeleteMissingBaseTexture_Click" />
+                                </StackPanel>
+                            </GroupBox>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>

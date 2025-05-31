@@ -15,16 +15,24 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using static grzyClothTool.Controls.CustomMessageBox;
+using ImageMagick;
+using CodeWalker.GameFiles;
+using grzyClothTool.Views;
+using System.IO;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using Material.Icons.WPF;
 
 namespace grzyClothTool.Controls
 {
     /// <summary>
     /// Interaction logic for DrawableList.xaml
     /// </summary>
-    public partial class DrawableList : UserControl
+    public partial class DrawableList : UserControl, INotifyPropertyChanged
     {
         public event EventHandler DrawableListSelectedValueChanged;
         public event KeyEventHandler DrawableListKeyDown;
+        public event PropertyChangedEventHandler PropertyChanged;
 
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.RegisterAttached("ItemsSource", typeof(ObservableCollection<GDrawable>), typeof(DrawableList), new PropertyMetadata(default(ObservableCollection<GDrawable>)));
@@ -61,6 +69,166 @@ namespace grzyClothTool.Controls
         private void OptimizeTexture_Click(object sender, RoutedEventArgs e)
         {
             //todo: Implement texture optimization logic here
+        }
+
+        private async void OptimizeDrawableTextures_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedDrawables = MainWindow.AddonManager.SelectedAddon.SelectedDrawables.ToList();
+
+            if (selectedDrawables.Count == 0)
+            {
+                CustomMessageBox.Show("No drawables selected.", "Optimize Textures", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            // Count total textures
+            int totalTextures = selectedDrawables.Sum(d => d.Textures.Count);
+
+            if (totalTextures == 0)
+            {
+                CustomMessageBox.Show("Selected drawables have no textures to optimize.", "Optimize Textures", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            var message = $"This will optimize {totalTextures} texture(s) from {selectedDrawables.Count} drawable(s).\n\n" +
+                         "Each texture size will be divided by 2 (e.g., 1024x512 → 512x256).\n\n" +
+                         "This operation cannot be undone. Do you want to continue?";
+
+            var result = CustomMessageBox.Show(message, "Optimize Textures", CustomMessageBox.CustomMessageBoxButtons.YesNo);
+            if (result != CustomMessageBox.CustomMessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            try
+            {
+                ProgressHelper.Start();
+                int processedTextures = 0;
+
+                foreach (var drawable in selectedDrawables)
+                {
+                    foreach (var texture in drawable.Textures)
+                    {
+                        await OptimizeTextureSize(texture);
+                        processedTextures++;
+                        
+                        // Update progress (simple percentage)
+                        var progress = (processedTextures * 100) / totalTextures;
+                        // Note: ProgressHelper might not support progress updates, but we can log it
+                    }
+                }
+
+                ProgressHelper.Stop($"Optimized {processedTextures} texture(s) in {{0}}", true);
+                SaveHelper.SetUnsavedChanges(true);
+
+                // Refresh texture details for all optimized textures
+                foreach (var drawable in selectedDrawables)
+                {
+                    foreach (var texture in drawable.Textures)
+                    {
+                        // Force reload texture details to reflect new size
+                        texture.IsLoading = true;
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(100); // Small delay to ensure file is written
+                            texture.IsLoading = false;
+                        });
+                    }
+                }
+
+                LogHelper.Log($"Successfully optimized {processedTextures} texture(s).", LogType.Info);
+                CustomMessageBox.Show($"Successfully optimized {processedTextures} texture(s).\n\nNew sizes are half of the original dimensions.", "Optimization Complete", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+            catch (Exception ex)
+            {
+                ProgressHelper.Stop("Texture optimization failed", false);
+                LogHelper.Log($"Error optimizing textures: {ex.Message}", LogType.Error);
+                CustomMessageBox.Show($"Error during texture optimization:\n{ex.Message}", "Optimization Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+        }
+
+        private async Task OptimizeTextureSize(GTexture texture)
+        {
+            try
+            {
+                // Get the current image
+                using var img = ImgHelper.GetImage(texture.FilePath);
+                if (img == null)
+                {
+                    LogHelper.Log($"Could not load texture: {texture.DisplayName}", LogType.Warning);
+                    return;
+                }
+
+                // Calculate new dimensions (halved)
+                int newWidth = Math.Max(1, img.Width / 2);
+                int newHeight = Math.Max(1, img.Height / 2);
+
+                // Ensure dimensions stay power of 2
+                var (correctedWidth, correctedHeight) = ImgHelper.CheckPowerOfTwo(newWidth, newHeight);
+
+                // Set up the image for DDS format
+                img.Format = MagickFormat.Dds;
+                img.Resize(correctedWidth, correctedHeight);
+
+                // Set DDS properties
+                var newMipMapCount = ImgHelper.GetCorrectMipMapAmount(correctedWidth, correctedHeight);
+                img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", newMipMapCount);
+                img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
+
+                // If it's a YTD file, we need to preserve the texture format
+                if (texture.Extension == ".ytd")
+                {
+                    // Try to preserve the original compression format
+                    var originalDetails = texture.TxtDetails;
+                    if (originalDetails != null && !string.IsNullOrEmpty(originalDetails.Compression))
+                    {
+                        var compressionString = GetCompressionString(originalDetails.Compression);
+                        img.Settings.SetDefine(MagickFormat.Dds, "compression", compressionString);
+                    }
+                    else
+                    {
+                        img.Settings.SetDefine(MagickFormat.Dds, "compression", "dxt5");
+                    }
+
+                    // Create YTD file
+                    var ytd = new YtdFile
+                    {
+                        TextureDict = new TextureDictionary()
+                    };
+
+                    var stream = new MemoryStream();
+                    img.Write(stream);
+
+                    var newDds = stream.ToArray();
+                    var newTxt = CodeWalker.Utils.DDSIO.GetTexture(newDds);
+                    newTxt.Name = texture.DisplayName;
+                    ytd.TextureDict.BuildFromTextureList([newTxt]);
+
+                    var bytes = ytd.Save();
+                    await File.WriteAllBytesAsync(texture.FilePath, bytes);
+                }
+                else
+                {
+                    // For DDS, PNG, JPG files, save directly
+                    img.Write(texture.FilePath);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Failed to optimize texture {texture.DisplayName}: {ex.Message}", LogType.Error);
+                throw;
+            }
+        }
+
+        private static string GetCompressionString(string cwCompression)
+        {
+            return cwCompression switch
+            {
+                "D3DFMT_DXT1" => "dxt1",
+                "D3DFMT_DXT3" => "dxt3", 
+                "D3DFMT_DXT5" => "dxt5",
+                _ => "dxt5",
+            };
         }
 
         private void MoveMenuItem_Click(object sender, RoutedEventArgs e)
@@ -349,6 +517,105 @@ namespace grzyClothTool.Controls
         }
 
         #endregion
+
+        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        private async void Border_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (sender is Border border && border.DataContext is GDrawable drawable)
+            {
+                // Create basic tooltip immediately (without Details info)
+                if (border.ToolTip == null)
+                {
+                    var tooltipPanel = new StackPanel();
+                    
+                    // Basic info (always available)
+                    tooltipPanel.Children.Add(new TextBlock 
+                    { 
+                        Text = drawable.Name, 
+                        FontWeight = FontWeights.Bold, 
+                        Margin = new Thickness(0, 0, 0, 5) 
+                    });
+                    tooltipPanel.Children.Add(new TextBlock 
+                    { 
+                        Text = drawable.TypeName, 
+                        Margin = new Thickness(0, 0, 0, 2) 
+                    });
+                    tooltipPanel.Children.Add(new TextBlock 
+                    { 
+                        Text = drawable.SexName, 
+                        Margin = new Thickness(0, 0, 0, 2) 
+                    });
+                    
+                    tooltipPanel.Children.Add(new Separator { Margin = new Thickness(0, 5, 0, 5) });
+                    
+                    // Polygon count info - initially show loading message
+                    tooltipPanel.Children.Add(new TextBlock 
+                    { 
+                        Text = "Polygon Count (Current / Limit):", 
+                        FontWeight = FontWeights.Bold, 
+                        Margin = new Thickness(0, 0, 0, 2) 
+                    });
+                    
+                    var polygonInfoBlock = new TextBlock 
+                    { 
+                        FontFamily = new FontFamily("Consolas"),
+                        Text = "Loading polygon information..."
+                    };
+                    tooltipPanel.Children.Add(polygonInfoBlock);
+                    
+                    border.ToolTip = tooltipPanel;
+                    
+                    // Load details asynchronously and update tooltip when ready
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var details = await drawable.LoadDetailsOnDemandAsync();
+                            
+                            // Update UI on the UI thread
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                if (details != null && border.ToolTip == tooltipPanel) // Check if tooltip is still the same
+                                {
+                                    // Update polygon info
+                                    polygonInfoBlock.Text = details.PolygonCountInfo ?? "No polygon information available";
+                                    
+                                    // Add warning info if available
+                                    if (details.IsWarning && !string.IsNullOrEmpty(details.Tooltip))
+                                    {
+                                        tooltipPanel.Children.Add(new Separator { Margin = new Thickness(0, 5, 0, 5) });
+                                        tooltipPanel.Children.Add(new TextBlock { Text = details.Tooltip });
+                                    }
+                                    
+                                    // Update warning icon
+                                    if (border.FindName("WarningIcon") is MaterialIcon warningIcon)
+                                    {
+                                        warningIcon.Visibility = details.IsWarning ? Visibility.Visible : Visibility.Collapsed;
+                                    }
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error loading drawable details on hover: {ex.Message}");
+                        }
+                    });
+                }
+            }
+        }
+
+        private void Border_MouseLeave(object sender, MouseEventArgs e)
+        {
+            // Optional: Clear tooltip to save memory
+            // if (sender is Border border)
+            // {
+            //     border.ToolTip = null;
+            // }
+        }
     }
 
     public class GhostLineAdorner : Adorner

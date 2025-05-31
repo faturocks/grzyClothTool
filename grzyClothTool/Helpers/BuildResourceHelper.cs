@@ -1,6 +1,9 @@
 ﻿using CodeWalker.GameFiles;
 using grzyClothTool.Models;
 using grzyClothTool.Models.Drawable;
+using grzyClothTool.Models.Texture;
+using grzyClothTool.Views;
+using ImageMagick;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,6 +24,7 @@ public class BuildResourceHelper
     private string _buildPath;
     private readonly string _baseBuildPath;
     private readonly bool _splitAddons;
+    private readonly bool _generateMipmaps;
     private readonly IProgress<int> _progress;
 
     private readonly bool shouldUseNumber = false;
@@ -28,7 +32,7 @@ public class BuildResourceHelper
     private readonly List<string> firstPersonFiles = [];
     private BuildResourceType _buildResourceType;
 
-    public BuildResourceHelper(string name, string path, IProgress<int> progress, BuildResourceType resourceType, bool splitAddons)
+    public BuildResourceHelper(string name, string path, IProgress<int> progress, BuildResourceType resourceType, bool splitAddons, bool generateMipmaps = false)
     {
         _projectName = name;
         _buildPath = path;
@@ -36,6 +40,7 @@ public class BuildResourceHelper
         _progress = progress;
         _buildResourceType = resourceType;
         _splitAddons = splitAddons;
+        _generateMipmaps = generateMipmaps;
 
         shouldUseNumber = MainWindow.AddonManager.Addons.Count > 1;
     }
@@ -71,10 +76,14 @@ public class BuildResourceHelper
         var projectName = GetProjectName(counter);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
-        var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
-                                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
-                                       .Select(x => x.Select(v => v.Value).OrderBy(d => d.Number).ToList())
-                                       .ToList();
+        
+        // Use optimized grouping for Alt:V
+        var drawableGroups = _buildResourceType == BuildResourceType.AltV 
+            ? OptimizeDrawableGroupsForAltV(drawables)
+            : drawables.Select((x, i) => new { Index = i, Value = x })
+                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
+                       .Select(x => x.Select(v => v.Value).OrderBy(d => d.Number).ToList())
+                       .ToList();
 
         // Prepare all directory paths first to minimize file system access
         var genderFolderName = sex == SexType.male ? "[male]" : "[female]";
@@ -126,10 +135,30 @@ public class BuildResourceHelper
                     }
                     else
                     {
+                        // Check if we should generate mipmaps
+                        bool shouldGenerateMipmaps = _generateMipmaps && 
+                                                   t.TxtDetails != null && 
+                                                   t.TxtDetails.MipMapCount == 1;
+
                         if(t.Extension != ".ytd")
                         {
                             txtBytes = await ImgHelper.Optimize(t, true);
                         } 
+                        else if (shouldGenerateMipmaps)
+                        {
+                            // Generate mipmaps for YTD files with only 1 mipmap
+                            try
+                            {
+                                txtBytes = await GenerateMipmapsForTexture(t);
+                                LogHelper.Log($"Generated mipmaps for texture: {t.DisplayName}", LogType.Info);
+                            }
+                            catch (Exception ex)
+                            {
+                                LogHelper.Log($"Failed to generate mipmaps for texture {t.DisplayName}: {ex.Message}", LogType.Warning);
+                                // Fall back to original file
+                                txtBytes = File.ReadAllBytes(t.FilePath);
+                            }
+                        }
                         else
                         {
                             txtBytes = File.ReadAllBytes(t.FilePath);
@@ -313,10 +342,14 @@ public class BuildResourceHelper
         var projectName = GetProjectName(counter);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
-        var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
-                                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
-                                       .Select(x => x.Select(v => v.Value).ToList())
-                                       .ToList();
+        
+        // Use optimized grouping for Alt:V
+        var drawableGroups = _buildResourceType == BuildResourceType.AltV 
+            ? OptimizeDrawableGroupsForAltV(drawables)
+            : drawables.Select((x, i) => new { Index = i, Value = x })
+                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
+                       .Select(x => x.Select(v => v.Value).ToList())
+                       .ToList();
 
         // Prepare all directory paths first to minimize file system access
         var genderFolderName = sex == SexType.male ? $"{projectName}_male.rpf" : $"{projectName}_female.rpf";
@@ -367,7 +400,31 @@ public class BuildResourceHelper
                         var optimizedBytes = await ImgHelper.Optimize(t);
                         fileOperations.Add(File.WriteAllBytesAsync(finalTexPath, optimizedBytes));
                     } else {
-                        fileOperations.Add(FileHelper.CopyAsync(t.FilePath, finalTexPath));
+                        // Check if we should generate mipmaps
+                        bool shouldGenerateMipmaps = _generateMipmaps && 
+                                                   t.TxtDetails != null && 
+                                                   t.TxtDetails.MipMapCount == 1 &&
+                                                   t.Extension == ".ytd";
+
+                        if (shouldGenerateMipmaps)
+                        {
+                            try
+                            {
+                                var txtBytes = await GenerateMipmapsForTexture(t);
+                                fileOperations.Add(File.WriteAllBytesAsync(finalTexPath, txtBytes));
+                                LogHelper.Log($"Generated mipmaps for texture: {t.DisplayName}", LogType.Info);
+                            }
+                            catch (Exception ex)
+                            {
+                                LogHelper.Log($"Failed to generate mipmaps for texture {t.DisplayName}: {ex.Message}", LogType.Warning);
+                                // Fall back to original file
+                                fileOperations.Add(FileHelper.CopyAsync(t.FilePath, finalTexPath));
+                            }
+                        }
+                        else
+                        {
+                            fileOperations.Add(FileHelper.CopyAsync(t.FilePath, finalTexPath));
+                        }
                     }
                 }
             }
@@ -666,10 +723,14 @@ public class BuildResourceHelper
         var projectName = GetProjectName(counter);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
-        var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
-                                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
-                                       .Select(x => x.Select(v => v.Value).ToList())
-                                       .ToList();
+        
+        // Use optimized grouping for Alt:V
+        var drawableGroups = _buildResourceType == BuildResourceType.AltV 
+            ? OptimizeDrawableGroupsForAltV(drawables)
+            : drawables.Select((x, i) => new { Index = i, Value = x })
+                       .GroupBy(x => x.Value.Number / GlobalConstants.MAX_DRAWABLES_IN_ADDON)
+                       .Select(x => x.Select(v => v.Value).ToList())
+                       .ToList();
 
         var fileOperations = new List<Task>();
 
@@ -708,8 +769,33 @@ public class BuildResourceHelper
                     }
                     else
                     {
-                        var texBytes = File.ReadAllBytes(t.FilePath);
-                        RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FilePath)}", texBytes);
+                        // Check if we should generate mipmaps
+                        bool shouldGenerateMipmaps = _generateMipmaps && 
+                                                   t.TxtDetails != null && 
+                                                   t.TxtDetails.MipMapCount == 1 &&
+                                                   t.Extension == ".ytd";
+
+                        if (shouldGenerateMipmaps)
+                        {
+                            try
+                            {
+                                var txtBytes = await GenerateMipmapsForTexture(t);
+                                RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FilePath)}", txtBytes);
+                                LogHelper.Log($"Generated mipmaps for texture: {t.DisplayName}", LogType.Info);
+                            }
+                            catch (Exception ex)
+                            {
+                                LogHelper.Log($"Failed to generate mipmaps for texture {t.DisplayName}: {ex.Message}", LogType.Warning);
+                                // Fall back to original file
+                                var texBytes = File.ReadAllBytes(t.FilePath);
+                                RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FilePath)}", texBytes);
+                            }
+                        }
+                        else
+                        {
+                            var texBytes = File.ReadAllBytes(t.FilePath);
+                            RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FilePath)}", texBytes);
+                        }
                     }
                 }
             }
@@ -892,7 +978,6 @@ public class BuildResourceHelper
         mb.AddStructureInfo(MetaName.CPVDrawblData);
         mb.AddStructureInfo(MetaName.CPVDrawblData__CPVClothComponentData);
         mb.AddStructureInfo(MetaName.CPVTextureData);
-        mb.AddStructureInfo(MetaName.CPedPropMetaData);
         mb.AddEnumInfo(MetaName.ePedVarComp);
         mb.AddEnumInfo(MetaName.eAnchorPoints);
         mb.AddEnumInfo(MetaName.ePropRenderFlags);
@@ -1054,6 +1139,128 @@ public class BuildResourceHelper
             SexType.female => "mp_f_freemode_01",
             _ => throw new ArgumentOutOfRangeException(nameof(sex), sex, "Wrong sexType GetPedName")
         };
+    }
+
+    private static string GetCompressionString(string cwCompression)
+    {
+        return cwCompression switch
+        {
+            "D3DFMT_DXT1" => "dxt1",
+            "D3DFMT_DXT3" => "dxt3", 
+            "D3DFMT_DXT5" => "dxt5",
+            _ => "dxt5",
+        };
+    }
+
+    private static async Task<byte[]> GenerateMipmapsForTexture(GTexture texture)
+    {
+        var ytd = new YtdFile
+        {
+            TextureDict = new TextureDictionary()
+        };
+
+        using var img = ImgHelper.GetImage(texture.FilePath);
+        if (img == null)
+        {
+            throw new InvalidOperationException("Could not load texture image");
+        }
+
+        img.Format = MagickFormat.Dds;
+        
+        // Calculate correct mipmap count
+        var newMipMapCount = ImgHelper.GetCorrectMipMapAmount(img.Width, img.Height);
+        
+        // Set DDS properties to generate mipmaps
+        img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", newMipMapCount);
+        img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
+        
+        // Try to preserve the original compression format
+        var originalDetails = texture.TxtDetails;
+        if (originalDetails != null && !string.IsNullOrEmpty(originalDetails.Compression))
+        {
+            var compressionString = GetCompressionString(originalDetails.Compression);
+            img.Settings.SetDefine(MagickFormat.Dds, "compression", compressionString);
+        }
+        else
+        {
+            img.Settings.SetDefine(MagickFormat.Dds, "compression", "dxt5");
+        }
+
+        var stream = new MemoryStream();
+        img.Write(stream);
+
+        var newDds = stream.ToArray();
+        var newTxt = CodeWalker.Utils.DDSIO.GetTexture(newDds);
+        newTxt.Name = texture.DisplayName;
+        ytd.TextureDict.BuildFromTextureList([newTxt]);
+
+        return ytd.Save();
+    }
+
+    /// <summary>
+    /// Optimizes drawable grouping for Alt:V to minimize YMT file count while respecting limits.
+    /// Uses a bin-packing approach: 128 drawables per type per YMT file.
+    /// </summary>
+    private List<List<GDrawable>> OptimizeDrawableGroupsForAltV(List<GDrawable> drawables)
+    {
+        var groups = new List<List<GDrawable>>();
+        var remainingDrawables = new List<GDrawable>(drawables);
+
+        while (remainingDrawables.Count > 0)
+        {
+            var currentGroup = new List<GDrawable>();
+            var currentGroupCapacity = new Dictionary<(int TypeNumeric, bool IsProp), int>();
+
+            // Initialize capacity for all types to 128
+            foreach (var drawable in remainingDrawables.GroupBy(d => new { d.TypeNumeric, d.IsProp }))
+            {
+                currentGroupCapacity[(drawable.Key.TypeNumeric, drawable.Key.IsProp)] = GlobalConstants.MAX_DRAWABLES_IN_ADDON;
+            }
+
+            // Greedy bin-packing: try to fit as many drawables as possible in current group
+            var drawablesToRemove = new List<GDrawable>();
+            
+            foreach (var drawable in remainingDrawables)
+            {
+                var key = (drawable.TypeNumeric, drawable.IsProp);
+                if (currentGroupCapacity.ContainsKey(key) && currentGroupCapacity[key] > 0)
+                {
+                    currentGroup.Add(drawable);
+                    currentGroupCapacity[key]--;
+                    drawablesToRemove.Add(drawable);
+                }
+            }
+
+            // Remove processed drawables
+            foreach (var drawable in drawablesToRemove)
+            {
+                remainingDrawables.Remove(drawable);
+            }
+
+            if (currentGroup.Count > 0)
+            {
+                groups.Add(currentGroup);
+            }
+            else
+            {
+                // Safety check - if we can't add any drawable, break to avoid infinite loop
+                LogHelper.Log("Warning: Unable to fit remaining drawables in any group. This should not happen.", LogType.Warning);
+                break;
+            }
+        }
+
+        LogHelper.Log($"Alt:V Optimization: {drawables.Count} drawables grouped into {groups.Count} YMT file(s)", LogType.Info);
+        
+        // Log statistics for each group
+        for (int i = 0; i < groups.Count; i++)
+        {
+            var typeStats = groups[i].GroupBy(d => new { d.TypeName, d.IsProp })
+                                   .Select(g => $"{g.Key.TypeName}{(g.Key.IsProp ? " (Props)" : "")}: {g.Count()}")
+                                   .ToList();
+            LogHelper.Log($"YMT {i + 1}: {string.Join(", ", typeStats)}", LogType.Info);
+        }
+
+        return groups;
     }
 
     #endregion

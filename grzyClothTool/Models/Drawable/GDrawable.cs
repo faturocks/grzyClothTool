@@ -126,7 +126,12 @@ public class GDrawable : INotifyPropertyChanged
     private GDrawableDetails _details;
     public GDrawableDetails Details
     {
-        get => _details;
+        get 
+        {
+            // For deserialized drawables, don't trigger automatic loading
+            // Loading will be handled manually when needed (e.g., on hover)
+            return _details;
+        }
         set
         {
             if (_details != value)
@@ -134,6 +139,57 @@ public class GDrawable : INotifyPropertyChanged
                 _details = value;
                 OnPropertyChanged();
             }
+        }
+    }
+
+    [JsonIgnore]
+    private bool _detailsLoadingStarted = false;
+    
+    // Public method to load details when explicitly requested
+    public async Task<GDrawableDetails> LoadDetailsOnDemandAsync()
+    {
+        // If already loaded, return immediately
+        if (_details != null) return _details;
+        
+        // If currently loading, wait for completion
+        if (_detailsLoadingStarted)
+        {
+            // Wait until loading is complete
+            while (_detailsLoadingStarted && _details == null)
+            {
+                await Task.Delay(50);
+            }
+            return _details;
+        }
+        
+        return await LoadDetailsAsync();
+    }
+    
+    private async Task<GDrawableDetails> LoadDetailsAsync()
+    {
+        // Prevent multiple simultaneous loads
+        if (_detailsLoadingStarted) return _details;
+        _detailsLoadingStarted = true;
+        
+        try
+        {
+            IsLoading = true;
+            var details = await LoadDrawableDetailsWithConcurrencyControl();
+            if (details != null)
+            {
+                Details = details;
+            }
+            return details;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load details for {Name}: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            IsLoading = false;
+            _detailsLoadingStarted = false;
         }
     }
 
@@ -267,30 +323,41 @@ public class GDrawable : INotifyPropertyChanged
 
         if (FilePath != null)
         {
-            Task<GDrawableDetails?> _drawableDetailsTask = LoadDrawableDetailsWithConcurrencyControl().ContinueWith(t =>
+            // Only start loading details if this is a new drawable being created
+            // For deserialized drawables (from project load), details will be loaded lazily when needed
+            if (IsNew)
             {
-                if (t.IsFaulted)
+                Task<GDrawableDetails?> _drawableDetailsTask = LoadDrawableDetailsWithConcurrencyControl().ContinueWith(t =>
                 {
-                    Console.WriteLine(t.Exception);
-                    //todo: add some warning that it couldn't load
-                    IsLoading = true;
-                    return null;
-                }
-
-                if (t.Status == TaskStatus.RanToCompletion)
-                {
-                    if (t.Result == null)
+                    if (t.IsFaulted)
                     {
+                        Console.WriteLine(t.Exception);
+                        //todo: add some warning that it couldn't load
+                        IsLoading = true;
                         return null;
                     }
 
-                    Details = t.Result;
-                    OnPropertyChanged(nameof(Details));
-                    IsLoading = false;
-                }
+                    if (t.Status == TaskStatus.RanToCompletion)
+                    {
+                        if (t.Result == null)
+                        {
+                            return null;
+                        }
 
-                return t.Result;
-            });
+                        Details = t.Result;
+                        OnPropertyChanged(nameof(Details));
+                        IsLoading = false;
+                    }
+
+                    return t.Result;
+                });
+            }
+            else
+            {
+                // For deserialized drawables, just mark as not loading
+                // Details will be loaded on-demand when accessed
+                IsLoading = false;
+            }
         }
     }
 

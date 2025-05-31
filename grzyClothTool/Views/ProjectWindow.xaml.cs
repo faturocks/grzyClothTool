@@ -23,6 +23,9 @@ using System.Windows.Input;
 using grzyClothTool.Models.Drawable;
 using grzyClothTool.Models.Texture;
 using System.Threading.Tasks;
+using System.Collections.ObjectModel;
+using System.Windows.Data;
+using grzyClothTool.Models.Other;
 
 namespace grzyClothTool.Views
 {
@@ -46,6 +49,9 @@ namespace grzyClothTool.Views
                 }
             }
         }
+
+        private string _selectedGenderFilter = "All";
+        private string _selectedTypeFilter = "All";
 
         public ProjectWindow()
         {
@@ -91,24 +97,115 @@ namespace grzyClothTool.Views
             var sexBtn = btn.Tag.ToString().Equals("male", StringComparison.CurrentCultureIgnoreCase) ? Enums.SexType.male : Enums.SexType.female;
             e.Handled = true;
 
-            OpenFolderDialog folder = new()
+            FolderBrowserDialog folder = new()
             {
-                Title = $"Select a folder containing drawable files ({btn.Tag})",
-                Multiselect = true
+                Description = $"Select a folder containing drawable files ({btn.Tag})",
+                UseDescriptionForTitle = true
             };
 
-            if (folder.ShowDialog() == true)
+            if (folder.ShowDialog() == DialogResult.OK)
             {
                 ProgressHelper.Start();
 
-                foreach (var fldr in folder.FolderNames)
-                {
-                    var files = Directory.GetFiles(fldr, "*.ydd", SearchOption.AllDirectories).OrderBy(f => Path.GetFileName(f)).ToArray();
-                    await MainWindow.AddonManager.AddDrawables(files, sexBtn);
-                }
+                var files = Directory.GetFiles(folder.SelectedPath, "*.ydd", SearchOption.AllDirectories).OrderBy(f => Path.GetFileName(f)).ToArray();
+                await MainWindow.AddonManager.AddDrawables(files, sexBtn);
 
                 ProgressHelper.Stop("Added drawables in {0}", true);
                 SaveHelper.SetUnsavedChanges(true);
+            }
+        }
+
+        private async void Add_DrawableFileAuto(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+
+            OpenFileDialog files = new()
+            {
+                Title = "Select drawable files (auto-detect gender)",
+                Filter = "Drawable files (*.ydd)|*.ydd",
+                Multiselect = true
+            };
+
+            if (files.ShowDialog() == true)
+            {
+                ProgressHelper.Start();
+
+                await ProcessFilesWithAutoGenderDetection(files.FileNames);
+
+                ProgressHelper.Stop("Added drawables in {0}", true);
+                SaveHelper.SetUnsavedChanges(true);
+            }
+        }
+
+        private async void Add_DrawableFolderAuto(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+
+            FolderBrowserDialog folder = new()
+            {
+                Description = "Select a folder containing drawable files (auto-detect gender)",
+                UseDescriptionForTitle = true
+            };
+
+            if (folder.ShowDialog() == DialogResult.OK)
+            {
+                ProgressHelper.Start();
+
+                var files = Directory.GetFiles(folder.SelectedPath, "*.ydd", SearchOption.AllDirectories).OrderBy(f => Path.GetFileName(f)).ToArray();
+                await ProcessFilesWithAutoGenderDetection(files);
+
+                ProgressHelper.Stop("Added drawables in {0}", true);
+                SaveHelper.SetUnsavedChanges(true);
+            }
+        }
+
+        private async Task ProcessFilesWithAutoGenderDetection(string[] filePaths)
+        {
+            // Group files by detected gender
+            var maleFiles = new List<string>();
+            var femaleFiles = new List<string>();
+            var unknownFiles = new List<string>();
+
+            foreach (var filePath in filePaths)
+            {
+                var fileName = Path.GetFileName(filePath);
+                
+                if (fileName.StartsWith("mp_f", StringComparison.OrdinalIgnoreCase))
+                {
+                    femaleFiles.Add(filePath);
+                }
+                else if (fileName.StartsWith("mp_m", StringComparison.OrdinalIgnoreCase))
+                {
+                    maleFiles.Add(filePath);
+                }
+                else
+                {
+                    unknownFiles.Add(filePath);
+                }
+            }
+
+            // Show warning if there are files with unknown gender
+            if (unknownFiles.Count > 0)
+            {
+                var unknownFileNames = string.Join("\n", unknownFiles.Select(Path.GetFileName));
+                var message = $"Could not detect gender for {unknownFiles.Count} file(s):\n\n{unknownFileNames}\n\nThese files will be processed as MALE by default.";
+                
+                CustomMessageBox.Show(message, "Gender Detection Warning", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                
+                // Add unknown files to male list as default
+                maleFiles.AddRange(unknownFiles);
+            }
+
+            // Process male files
+            if (maleFiles.Count > 0)
+            {
+                await MainWindow.AddonManager.AddDrawables(maleFiles.ToArray(), Enums.SexType.male);
+            }
+
+            // Process female files
+            if (femaleFiles.Count > 0)
+            {
+                await MainWindow.AddonManager.AddDrawables(femaleFiles.ToArray(), Enums.SexType.female);
             }
         }
 
@@ -192,6 +289,9 @@ namespace grzyClothTool.Views
                     {
                         menuItem.IsEnabled = menuItem.Header != addon.Name;
                     }
+                    
+                    // Apply filters to the newly selected addon
+                    ApplyFilters();
                 } catch (Exception)  { }
             }
         }
@@ -203,6 +303,101 @@ namespace grzyClothTool.Views
                 Owner = Window.GetWindow(this)
             };
             buildWindow.ShowDialog();
+        }
+
+        private void RecalculateAddons_Btn(object sender, RoutedEventArgs e)
+        {
+            var message = "This will recalculate addon separation and redistribute all drawables across addons.\n\n" +
+                         "Empty addons will be removed and drawables will be reorganized based on the 128 drawable limit per addon.\n\n" +
+                         "Do you want to continue?";
+
+            var result = CustomMessageBox.Show(message, "Recalculate Addon Separation", CustomMessageBox.CustomMessageBoxButtons.YesNo);
+            if (result != CustomMessageBox.CustomMessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            try
+            {
+                RecalculateAddonSeparation();
+                CustomMessageBox.Show("Addon separation has been recalculated successfully.", "Recalculate Addon Separation", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                LogHelper.Log("Addon separation recalculated manually by user.", LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Error recalculating addon separation: {ex.Message}", "Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                LogHelper.Log($"Error recalculating addon separation: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private void RecalculateAddonSeparation()
+        {
+            var addonsToRemove = new List<Addon>();
+            
+            // Find all empty addons
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                if (addon.Drawables.Count == 0)
+                {
+                    addonsToRemove.Add(addon);
+                }
+            }
+            
+            // Remove empty addons (but keep at least one)
+            foreach (var addon in addonsToRemove)
+            {
+                if (MainWindow.AddonManager.Addons.Count > 1)
+                {
+                    MainWindow.AddonManager.Addons.Remove(addon);
+                }
+            }
+            
+            // Redistribute drawables to ensure proper addon separation based on 128 limit
+            var allDrawables = new List<GDrawable>();
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                allDrawables.AddRange(addon.Drawables);
+                addon.Drawables.Clear();
+            }
+            
+            // Sort all drawables by type and sex for proper redistribution
+            allDrawables = allDrawables.OrderBy(d => d.IsProp)
+                                     .ThenBy(d => d.Sex)
+                                     .ThenBy(d => d.TypeNumeric)
+                                     .ThenBy(d => d.Number)
+                                     .ToList();
+            
+            // Clear all existing addons except the first one
+            while (MainWindow.AddonManager.Addons.Count > 1)
+            {
+                MainWindow.AddonManager.Addons.RemoveAt(MainWindow.AddonManager.Addons.Count - 1);
+            }
+            
+            // Redistribute drawables using the existing AddDrawable logic
+            foreach (var drawable in allDrawables)
+            {
+                MainWindow.AddonManager.AddDrawable(drawable);
+                drawable.IsNew = false; // Don't mark as new during redistribution
+            }
+            
+            // Adjust addon names to maintain sequential numbering
+            for (int i = 0; i < MainWindow.AddonManager.Addons.Count; i++)
+            {
+                MainWindow.AddonManager.Addons[i].Name = $"Addon {i + 1}";
+            }
+            
+            // Update move menu items
+            MainWindow.AddonManager.MoveMenuItems.Clear();
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                MainWindow.AddonManager.MoveMenuItems.Add(new MoveMenuItem() 
+                { 
+                    Header = addon.Name, 
+                    IsEnabled = true 
+                });
+            }
+            
+            SaveHelper.SetUnsavedChanges(true);
         }
 
         private void Preview_Btn(object sender, RoutedEventArgs e)
@@ -309,9 +504,71 @@ namespace grzyClothTool.Views
             CWHelper.CWForm.Refresh();
         }
 
-        protected void OnPropertyChanged([CallerMemberName] string name = null)
+        private void GenderFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+            if (sender is System.Windows.Controls.ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
+            {
+                _selectedGenderFilter = item.Content.ToString();
+                ApplyFilters();
+            }
+        }
+
+        private void TypeFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.ComboBox comboBox && comboBox.SelectedItem is ComboBoxItem item)
+            {
+                _selectedTypeFilter = item.Content.ToString();
+                ApplyFilters();
+            }
+        }
+
+        private void ApplyFilters()
+        {
+            if (MainWindow.AddonManager?.SelectedAddon?.Drawables == null) return;
+
+            // Get the current addon's drawables collection
+            var drawables = MainWindow.AddonManager.SelectedAddon.Drawables;
+            
+            // Create or get the CollectionViewSource
+            var view = CollectionViewSource.GetDefaultView(drawables);
+            
+            if (view != null)
+            {
+                // Remove any existing filter
+                view.Filter = null;
+                
+                // Apply new filter if not "All"
+                if (_selectedGenderFilter != "All" || _selectedTypeFilter != "All")
+                {
+                    view.Filter = item =>
+                    {
+                        if (item is GDrawable drawable)
+                        {
+                            // Apply gender filter
+                            bool genderMatch = _selectedGenderFilter == "All" ||
+                                             (_selectedGenderFilter == "Male" && drawable.Sex == Enums.SexType.male) ||
+                                             (_selectedGenderFilter == "Female" && drawable.Sex == Enums.SexType.female);
+
+                            // Apply type filter
+                            bool typeMatch = _selectedTypeFilter == "All" ||
+                                           (_selectedTypeFilter == "Props" && drawable.IsProp) ||
+                                           (_selectedTypeFilter != "Props" && !drawable.IsProp && 
+                                            drawable.TypeName?.Equals(_selectedTypeFilter, StringComparison.OrdinalIgnoreCase) == true);
+
+                            return genderMatch && typeMatch;
+                        }
+                        return true;
+                    };
+                }
+                
+                // Refresh the view
+                view.Refresh();
+            }
+        }
+
+        protected virtual void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
 }

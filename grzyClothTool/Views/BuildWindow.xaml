@@ -12,7 +12,7 @@
         Closing="Window_Closing"
         Title="grzyClothTool - Build resource"
         Background="{DynamicResource Brush50}"
-        Height="500"
+        Height="550"
         Width="500">
     <Grid>
         <Grid.RowDefinitions>
@@ -63,11 +63,18 @@
                 Text="{Binding BuildPath}" />
 
             <c:ModernLabelCheckBox 
-                Label="Build addons as separate resources" 
+                Label="Build addons as separate resources (Alt:V: Optimized for minimal YMT count)" 
                 x:Name="split_addons" 
                 VerticalAlignment="Top" 
                 Margin="10,10,10,0"
                 IsChecked="{Binding SplitAddons, Mode=TwoWay}"/>
+
+            <c:ModernLabelCheckBox 
+                Label="Generate mipmaps for textures" 
+                x:Name="generate_mipmaps" 
+                VerticalAlignment="Top" 
+                Margin="10,10,10,15"
+                IsChecked="{Binding GenerateMipmaps, Mode=TwoWay}"/>
         </StackPanel>
 
         <Grid Grid.Row="1" Margin="15,5,15,5" >
