@@ -304,6 +304,7 @@ namespace grzyClothTool.Controls
                 {
                     "DDS" or "PNG" => $"Select the folder to export textures as {tag}",
                     "YTD" => "Select the folder to export drawable with textures",
+                    "JSON" => "Select the folder to export debug info as JSON",
                     _ => "Select the folder to export drawable"
                 },
                 Multiselect = false
@@ -318,6 +319,12 @@ namespace grzyClothTool.Controls
 
             try
             {
+                if (tag == "JSON")
+                {
+                    await FileHelper.SaveDrawablesAsJsonAsync(selectedDrawables, folderPath).ConfigureAwait(false);
+                    return;
+                }
+
                 if (!string.IsNullOrEmpty(tag) && (tag == "YTD" || tag == "PNG" || tag == "DDS"))
                 {
                     foreach (var drawable in selectedDrawables)

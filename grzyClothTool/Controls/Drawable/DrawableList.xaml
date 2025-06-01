@@ -30,6 +30,7 @@
             <MenuItem Header="Export as YDD with textures" Click="ExportDrawable_Click" Tag="YTD" />
             <MenuItem Header="Export only textures as DDS" Click="ExportDrawable_Click" Tag="DDS" />
             <MenuItem Header="Export only textures as PNG" Click="ExportDrawable_Click" Tag="PNG" />
+            <MenuItem Header="Export debug info as JSON" Click="ExportDrawable_Click" Tag="JSON" />
         </ContextMenu>
         <ContextMenu x:Key="MultipleSelectionContextMenu">
             <MenuItem Header="Optimize textures" Click="OptimizeDrawableTextures_Click" />
@@ -47,6 +48,7 @@
             <MenuItem Header="Export as YDD with textures" Click="ExportDrawable_Click" Tag="YTD" />
             <MenuItem Header="Export only textures as DDS" Click="ExportDrawable_Click" Tag="DDS" />
             <MenuItem Header="Export only textures as PNG" Click="ExportDrawable_Click" Tag="PNG" />
+            <MenuItem Header="Export debug info as JSON" Click="ExportDrawable_Click" Tag="JSON" />
         </ContextMenu>
 
         <Style TargetType="ListBox" x:Key="ListBoxStyleWithContextMenu">

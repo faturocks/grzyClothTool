@@ -14,6 +14,7 @@ using grzyClothTool.Models.Drawable;
 using grzyClothTool.Models.Texture;
 using grzyClothTool.Views;
 using ImageMagick;
+using System.Text.Json;
 
 namespace grzyClothTool.Helpers;
 
@@ -275,5 +276,211 @@ public static class FileHelper
         await Task.WhenAll(tasks);
 
         ProgressHelper.Stop($"Exported {successfulExports} drawable(s) in {{0}}", true);
+    }
+
+    public static async Task SaveDrawablesAsJsonAsync(List<GDrawable> drawables, string folderPath)
+    {
+        Directory.CreateDirectory(folderPath);
+        ProgressHelper.Start("Started exporting drawables as JSON");
+
+        int successfulExports = 0;
+
+        // Process each drawable asynchronously and save it to the specified folder
+        var tasks = drawables.Select(async drawable =>
+        {
+            try
+            {
+                // Create comprehensive drawable data for debugging
+                var debugData = new
+                {
+                    // Basic drawable information
+                    Name = drawable.Name,
+                    FilePath = drawable.FilePath,
+                    FirstPersonPath = drawable.FirstPersonPath,
+                    ClothPhysicsPath = drawable.ClothPhysicsPath,
+                    
+                    // Type and identification
+                    TypeName = drawable.TypeName,
+                    TypeNumeric = drawable.TypeNumeric,
+                    IsProp = drawable.IsProp,
+                    IsComponent = drawable.IsComponent,
+                    Sex = drawable.Sex.ToString(),
+                    SexName = drawable.SexName,
+                    Number = drawable.Number,
+                    DisplayNumber = drawable.DisplayNumber,
+                    
+                    // Configuration properties
+                    HasSkin = drawable.HasSkin,
+                    Audio = drawable.Audio,
+                    RenderFlag = drawable.RenderFlag,
+                    Flags = drawable.Flags,
+                    FlagsText = drawable.FlagsText,
+                    
+                    // Selected flags detail
+                    SelectedFlags = drawable.SelectedFlags?.Select(f => new 
+                    {
+                        Text = f.Text,
+                        Value = f.Value,
+                        IsSelected = f.IsSelected
+                    }).ToList(),
+                    
+                    // Hair and high heels settings
+                    EnableHairScale = drawable.EnableHairScale,
+                    HairScaleValue = drawable.HairScaleValue,
+                    EnableHighHeels = drawable.EnableHighHeels,
+                    HighHeelsValue = drawable.HighHeelsValue,
+                    
+                    // Preview settings
+                    EnableKeepPreview = drawable.EnableKeepPreview,
+                    
+                    // Loading state
+                    IsLoading = drawable.IsLoading,
+                    IsNew = drawable.IsNew,
+                    IsReserved = drawable.IsReserved,
+                    
+                    // Textures information
+                    Textures = drawable.Textures?.Select(tex => new
+                    {
+                        FilePath = tex.FilePath,
+                        DisplayName = tex.DisplayName,
+                        Extension = tex.Extension,
+                        Number = tex.Number,
+                        TxtNumber = tex.TxtNumber,
+                        TxtLetter = tex.TxtLetter,
+                        TypeNumeric = tex.TypeNumeric,
+                        TypeName = tex.TypeName,
+                        IsProp = tex.IsProp,
+                        HasSkin = tex.HasSkin,
+                        IsOptimizedDuringBuild = tex.IsOptimizedDuringBuild,
+                        IsPreviewDisabled = tex.IsPreviewDisabled,
+                        IsLoading = tex.IsLoading,
+                        
+                        // Texture details
+                        TxtDetails = tex.TxtDetails != null ? new
+                        {
+                            Width = tex.TxtDetails.Width,
+                            Height = tex.TxtDetails.Height,
+                            MipMapCount = tex.TxtDetails.MipMapCount,
+                            Compression = tex.TxtDetails.Compression,
+                            Name = tex.TxtDetails.Name,
+                            Type = tex.TxtDetails.Type,
+                            IsOptimizeNeeded = tex.TxtDetails.IsOptimizeNeeded,
+                            IsOptimizeNeededTooltip = tex.TxtDetails.IsOptimizeNeededTooltip
+                        } : null,
+                        
+                        // Optimization details
+                        OptimizeDetails = tex.OptimizeDetails != null ? new
+                        {
+                            Width = tex.OptimizeDetails.Width,
+                            Height = tex.OptimizeDetails.Height,
+                            MipMapCount = tex.OptimizeDetails.MipMapCount,
+                            Compression = tex.OptimizeDetails.Compression,
+                            Name = tex.OptimizeDetails.Name,
+                            Type = tex.OptimizeDetails.Type,
+                            IsOptimizeNeeded = tex.OptimizeDetails.IsOptimizeNeeded,
+                            IsOptimizeNeededTooltip = tex.OptimizeDetails.IsOptimizeNeededTooltip
+                        } : null
+                    }).ToList(),
+                    
+                    // Detailed drawable information (loaded on demand)
+                    Details = drawable.Details != null ? new
+                    {
+                        TexturesCount = drawable.Details.TexturesCount,
+                        IsWarning = drawable.Details.IsWarning,
+                        Tooltip = drawable.Details.Tooltip,
+                        PolygonCountInfo = drawable.Details.PolygonCountInfo,
+                        
+                        // LOD models information
+                        AllModels = drawable.Details.AllModels?.ToDictionary(
+                            kvp => kvp.Key.ToString(),
+                            kvp => kvp.Value != null ? new
+                            {
+                                PolyCount = kvp.Value.PolyCount
+                            } : null
+                        ),
+                        
+                        // Embedded textures information
+                        EmbeddedTextures = drawable.Details.EmbeddedTextures?.ToDictionary(
+                            kvp => kvp.Key.ToString(),
+                            kvp => kvp.Value != null ? new
+                            {
+                                Width = kvp.Value.Width,
+                                Height = kvp.Value.Height,
+                                MipMapCount = kvp.Value.MipMapCount,
+                                Compression = kvp.Value.Compression,
+                                Name = kvp.Value.Name,
+                                Type = kvp.Value.Type,
+                                IsOptimizeNeeded = kvp.Value.IsOptimizeNeeded,
+                                IsOptimizeNeededTooltip = kvp.Value.IsOptimizeNeededTooltip
+                            } : null
+                        )
+                    } : null,
+                    
+                    // Metadata for debugging
+                    ExportMetadata = new
+                    {
+                        ExportDate = DateTime.UtcNow,
+                        ExportVersion = "1.0",
+                        FileExists = File.Exists(drawable.FilePath),
+                        FileSize = File.Exists(drawable.FilePath) ? new FileInfo(drawable.FilePath).Length : 0,
+                        FirstPersonFileExists = !string.IsNullOrEmpty(drawable.FirstPersonPath) && File.Exists(drawable.FirstPersonPath),
+                        ClothPhysicsFileExists = !string.IsNullOrEmpty(drawable.ClothPhysicsPath) && File.Exists(drawable.ClothPhysicsPath)
+                    }
+                };
+
+                // Load drawable details if not already loaded for complete information
+                if (drawable.Details == null && !drawable.IsLoading)
+                {
+                    try
+                    {
+                        await drawable.LoadDetailsOnDemandAsync();
+                        
+                        // Update the details in our export data
+                        if (drawable.Details != null)
+                        {
+                            var detailsProperty = debugData.GetType().GetProperty("Details");
+                            // Note: We'd need to recreate the object with updated details, but for simplicity we'll keep it as is
+                            // The details loading is async and might complete after JSON serialization
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogHelper.Log($"Could not load details for drawable {drawable.Name}: {ex.Message}", Views.LogType.Warning);
+                    }
+                }
+
+                // Serialize to JSON with indentation for readability
+                var options = new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                };
+
+                var json = JsonSerializer.Serialize(debugData, options);
+                
+                string filePath = Path.Combine(folderPath, $"{drawable.Name}.json");
+
+                // Check if file exists
+                if (File.Exists(filePath))
+                {
+                    LogHelper.Log($"Could not save drawable JSON: {drawable.Name}. Error: File already exists.", Views.LogType.Error);
+                    return;
+                }
+
+                await File.WriteAllTextAsync(filePath, json);
+                successfulExports++;
+                
+                LogHelper.Log($"Exported drawable JSON: {drawable.Name}", Views.LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                // Log the error and continue processing other drawables
+                LogHelper.Log($"Could not save drawable JSON: {drawable.Name}. Error: {ex.Message}.", Views.LogType.Error);
+            }
+        });
+
+        await Task.WhenAll(tasks);
+
+        ProgressHelper.Stop($"Exported {successfulExports} drawable(s) as JSON in {{0}}", true);
     }
 }

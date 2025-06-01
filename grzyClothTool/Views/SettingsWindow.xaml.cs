@@ -328,6 +328,113 @@ namespace grzyClothTool.Views
             }
         }
 
+        public void DeleteDuplicatedObjects_Click(object sender, RoutedEventArgs e)
+        {
+            // Show category selection dialog
+            var includedCategories = ShowCategorySelectionDialog();
+            if (includedCategories == null) // User cancelled
+                return;
+
+            var drawablesToDelete = new List<GDrawable>();
+            var duplicateGroups = new Dictionary<string, List<GDrawable>>();
+
+            // Collect all drawables from the selected categories
+            var allDrawables = new List<GDrawable>();
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                foreach (var drawable in addon.Drawables)
+                {
+                    // Skip if drawable category is not included
+                    if (!ShouldIncludeCategory(drawable, includedCategories))
+                        continue;
+
+                    // Skip reserved drawables
+                    if (drawable.IsReserved)
+                        continue;
+
+                    allDrawables.Add(drawable);
+                }
+            }
+
+            if (allDrawables.Count == 0)
+            {
+                CustomMessageBox.Show("No models found in the selected categories.", "Remove Duplicated Objects", CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            // Group drawables by their polygon signature
+            foreach (var drawable in allDrawables)
+            {
+                string polygonSignature = GetPolygonSignature(drawable);
+                
+                // Only consider drawables with valid polygon data as potential duplicates
+                if (!string.IsNullOrEmpty(polygonSignature))
+                {
+                    if (!duplicateGroups.ContainsKey(polygonSignature))
+                    {
+                        duplicateGroups[polygonSignature] = new List<GDrawable>();
+                    }
+                    duplicateGroups[polygonSignature].Add(drawable);
+                }
+            }
+
+            // Find groups with more than one drawable (duplicates)
+            var duplicateEntries = duplicateGroups.Where(kvp => kvp.Value.Count > 1).ToList();
+
+            if (duplicateEntries.Count == 0)
+            {
+                CustomMessageBox.Show("No duplicate models found based on polygon counts.", "Remove Duplicated Objects", CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            // Collect drawables to delete (keep the first one in each group, delete the rest)
+            int duplicateCount = 0;
+            foreach (var duplicateGroup in duplicateEntries)
+            {
+                var drawablesInGroup = duplicateGroup.Value;
+                // Keep the first drawable, delete the rest
+                for (int i = 1; i < drawablesInGroup.Count; i++)
+                {
+                    drawablesToDelete.Add(drawablesInGroup[i]);
+                    duplicateCount++;
+                }
+            }
+
+            var message = $"Found {duplicateEntries.Count} group(s) of duplicate models with {duplicateCount} duplicate(s) to remove.\n\n" +
+                         "Included categories: " + string.Join(", ", includedCategories) + "\n\n" +
+                         "Duplicates are identified by matching polygon counts across LOD levels.\n" +
+                         "The first model in each group will be kept, others will be deleted.\n\n" +
+                         "Do you want to delete these duplicate models?";
+
+            var result = CustomMessageBox.Show(message, "Remove Duplicated Objects", CustomMessageBoxButtons.YesNo);
+            if (result == CustomMessageBoxResult.Yes)
+            {
+                MainWindow.AddonManager.DeleteDrawables(drawablesToDelete, true);
+                RecalculateAddonSeparation();
+                SaveHelper.SetUnsavedChanges(true);
+                LogHelper.Log($"Deleted {duplicateCount} duplicate model(s) from {duplicateEntries.Count} group(s).", LogType.Info);
+            }
+        }
+
+        private string GetPolygonSignature(GDrawable drawable)
+        {
+            if (drawable.Details?.AllModels == null)
+                return null;
+
+            var highModel = drawable.Details.AllModels.GetValueOrDefault(GDrawableDetails.DetailLevel.High);
+            var medModel = drawable.Details.AllModels.GetValueOrDefault(GDrawableDetails.DetailLevel.Med);
+            var lowModel = drawable.Details.AllModels.GetValueOrDefault(GDrawableDetails.DetailLevel.Low);
+
+            // Create a signature based on polygon counts for each LOD level
+            // Use "null" string for missing LODs to distinguish from 0 polygon models
+            var highPolygons = highModel?.PolyCount.ToString() ?? "null";
+            var medPolygons = medModel?.PolyCount.ToString() ?? "null";
+            var lowPolygons = lowModel?.PolyCount.ToString() ?? "null";
+
+            // Include drawable type and gender in signature to avoid false positives
+            return $"{drawable.TypeNumeric}_{drawable.Sex}_{highPolygons}_{medPolygons}_{lowPolygons}";
+        }
+
         private bool IsNormalOrSpecularTexture(string textureName)
         {
             if (string.IsNullOrEmpty(textureName))

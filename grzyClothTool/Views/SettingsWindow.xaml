@@ -148,6 +148,9 @@
                                     
                                     <TextBlock Padding="0,10,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Delete models with textures that match the selected unoptimized texture criteria.</TextBlock>
                                     <c:CustomButton Label="DELETE UNOPTIMIZED TEXTURES" Padding="10" CornerRadius="5" MyBtnClickEvent="DeleteUnoptimizedTextures_Click" />
+                                    
+                                    <TextBlock Padding="0,10,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Find and remove duplicate models based on matching polygon counts across LOD levels.</TextBlock>
+                                    <c:CustomButton Label="REMOVE DUPLICATED OBJECTS" Padding="10" CornerRadius="5" MyBtnClickEvent="DeleteDuplicatedObjects_Click" />
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
