@@ -459,11 +459,10 @@ namespace grzyClothTool.Controls
             var newValue = e.DependencyPropertyChangedEventArgs.NewValue;
             var oldValue = e.DependencyPropertyChangedEventArgs.OldValue;
 
-            if ((newValue == null || oldValue == null) || newValue == oldValue)
+            if((newValue == null || oldValue == null) || newValue == oldValue)
             {
                 return;
             }
-
 
             SelectedDraw.ChangeDrawableSex(newValue.ToString());
         }
@@ -570,6 +569,90 @@ namespace grzyClothTool.Controls
         private void AllowOverride_Click(object sender, RoutedEventArgs e)
         {
             MainWindow.AddonManager.SelectedAddon.AllowOverrideDrawables = true;
+        }
+
+        private void PositionTextBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                MoveDrawableToPosition(sender as TextBox);
+                ((TextBox)sender).MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+            }
+        }
+
+        private void PositionTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            MoveDrawableToPosition(sender as TextBox);
+        }
+
+        private void MoveDrawableToPosition(TextBox textBox)
+        {
+            if (MainWindow.AddonManager.SelectedAddon.SelectedDrawable == null || textBox == null)
+                return;
+
+            var drawable = MainWindow.AddonManager.SelectedAddon.SelectedDrawable;
+            
+            if (!int.TryParse(textBox.Text, out int newPosition))
+            {
+                // Reset to current position if invalid input
+                textBox.Text = drawable.Number.ToString();
+                return;
+            }
+
+            // Get drawables of the same type
+            var drawables = MainWindow.AddonManager.SelectedAddon.Drawables;
+            var sameTypeDrawables = drawables.Where(x => x.IsProp == drawable.IsProp && x.Sex == drawable.Sex && x.TypeNumeric == drawable.TypeNumeric).ToList();
+            
+            // Validate position range
+            if (newPosition < 0 || newPosition >= sameTypeDrawables.Count)
+            {
+                // Reset to current position if out of range
+                textBox.Text = drawable.Number.ToString();
+                return;
+            }
+
+            // Find the current position in the filtered list
+            int oldPosition = sameTypeDrawables.IndexOf(drawable);
+            
+            if (oldPosition == newPosition)
+            {
+                // No change needed
+                return;
+            }
+
+            // Get the target drawable at the new position
+            var targetDrawable = sameTypeDrawables[newPosition];
+            
+            // Find their indices in the main collection
+            int oldIndex = drawables.IndexOf(drawable);
+            int newIndex = drawables.IndexOf(targetDrawable);
+
+            // Move the drawable using the same logic as drag and drop
+            if (oldIndex < newIndex)
+            {
+                for (int i = oldIndex; i < newIndex; i++)
+                {
+                    (drawables[i + 1], drawables[i]) = (drawables[i], drawables[i + 1]);
+                }
+            }
+            else
+            {
+                for (int i = oldIndex; i > newIndex; i--)
+                {
+                    (drawables[i - 1], drawables[i]) = (drawables[i], drawables[i - 1]);
+                }
+            }
+
+            // Log the movement
+            LogHelper.Log($"Drawable '{drawable.Name}' moved from position {oldPosition} to {newPosition}");
+            
+            // Reassign numbers using the same method as drag and drop
+            drawables.ReassignNumbers(drawable);
+            
+            // Update the TextBox to show the correct position
+            textBox.Text = drawable.Number.ToString();
+            
+            SaveHelper.SetUnsavedChanges(true);
         }
     }
 }
