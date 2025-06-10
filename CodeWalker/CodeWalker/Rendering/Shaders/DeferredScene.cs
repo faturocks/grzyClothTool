@@ -81,6 +81,9 @@ namespace CodeWalker.Rendering
         int Height = 0;
         ViewportF Viewport;
 
+        // Add support for transparent background rendering
+        public bool UseTransparentBackground { get; set; } = false;
+
         VertexShader DirLightVS;
         PixelShader DirLightPS;
         PixelShader DirLightMSPS;
@@ -353,7 +356,13 @@ namespace CodeWalker.Rendering
         public void Clear(DeviceContext context)
         {
             GBuffers.Clear(context, new Color4(0.0f, 0.0f, 0.0f, 0.0f));
-            SceneColour.Clear(context, new Color4(0.2f, 0.4f, 0.6f, 0.0f));
+            
+            // Use transparent background for screenshots, otherwise use default blue
+            Color4 clearColor = UseTransparentBackground 
+                ? new Color4(0.0f, 0.0f, 0.0f, 0.0f)  // Transparent
+                : new Color4(0.2f, 0.4f, 0.6f, 0.0f); // Default blue
+                
+            SceneColour.Clear(context, clearColor);
         }
         public void ClearDepth(DeviceContext context)
         {

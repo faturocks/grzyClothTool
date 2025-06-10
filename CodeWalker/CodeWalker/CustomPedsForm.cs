@@ -152,6 +152,9 @@ namespace CodeWalker
         private int originalHeight = 0;
         private const int FIXED_SCREENSHOT_RESOLUTION = 1024;
 
+        // Add flag to track transparent rendering mode
+        private bool isTransparentRenderingMode = false;
+
         public class ComponentComboItem
         {
             public MCPVDrawblData DrawableData { get; set; }
@@ -325,6 +328,20 @@ namespace CodeWalker
             Renderer.Update(elapsed, MouseLastPoint.X, MouseLastPoint.Y);
 
             Renderer.BeginRender(context);
+
+            // Ensure transparent flags are set if DefScene/HDR were just created by BeginRender
+            if (isTransparentRenderingMode)
+            {
+                if (Renderer.shaders?.DefScene != null && !Renderer.shaders.DefScene.UseTransparentBackground)
+                {
+                    Renderer.shaders.DefScene.UseTransparentBackground = true;
+                }
+                
+                if (Renderer.shaders?.HDR != null && !Renderer.shaders.HDR.UseTransparentBackground)
+                {
+                    Renderer.shaders.HDR.UseTransparentBackground = true;
+                }
+            }
 
             Renderer.RenderSkyAndClouds();
 
@@ -1798,7 +1815,7 @@ namespace CodeWalker
                 // Try DirectX method first
                 try
                 {
-                    success = TakeDirectXScreenshot(filePath);
+                    success = TakeDirectXTransparentScreenshot(filePath);
                     if (success)
                     {
                         method = "DirectX";
@@ -1834,41 +1851,46 @@ namespace CodeWalker
             }
         }
 
-        private bool TakeDirectXScreenshot(string filePath)
+        private bool TakeDirectXTransparentScreenshot(string filePath)
         {
             try
             {
-                // Validate DirectX is ready
-                if (Renderer?.DXMan?.device == null || Renderer?.DXMan?.context == null || Renderer?.DXMan?.backbuffer == null)
-                {
-                    return false;
-                }
-
                 var device = Renderer.DXMan.device;
                 var context = Renderer.DXMan.context;
-                var backBuffer = Renderer.DXMan.backbuffer;
-
-                // Get backbuffer description
-                var desc = backBuffer.Description;
-
-                // Create staging texture for CPU access
-                var stagingDesc = new SharpDX.Direct3D11.Texture2DDescription()
+                
+                // Instead of capturing from backbuffer, capture from the render target where transparency is handled
+                Texture2D sourceTexture = null;
+                Texture2DDescription desc;
+                
+                if (Renderer.shaders?.DefScene?.SceneColour != null)
                 {
-                    Width = desc.Width,
-                    Height = desc.Height,
-                    MipLevels = 1,
-                    ArraySize = 1,
-                    Format = desc.Format,
-                    SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0), // No multisampling for staging
-                    Usage = SharpDX.Direct3D11.ResourceUsage.Staging,
-                    BindFlags = SharpDX.Direct3D11.BindFlags.None,
-                    CpuAccessFlags = SharpDX.Direct3D11.CpuAccessFlags.Read,
-                    OptionFlags = SharpDX.Direct3D11.ResourceOptionFlags.None
-                };
+                    // Use DefScene SceneColour render target - this has our transparent background
+                    sourceTexture = Renderer.shaders.DefScene.SceneColour.Texture;
+                    desc = sourceTexture.Description;
+                }
+                else if (Renderer.shaders?.HDR?.PrimaryTexture != null)
+                {
+                    // Fallback to HDR Primary render target
+                    sourceTexture = Renderer.shaders.HDR.PrimaryTexture.Texture;
+                    desc = sourceTexture.Description;
+                }
+                else
+                {
+                    // Last resort - use backbuffer (but this won't have transparency)
+                    sourceTexture = Renderer.DXMan.backbuffer;
+                    desc = sourceTexture.Description;
+                }
+
+                // Create staging texture for CPU access with alpha support
+                var stagingDesc = desc;
+                stagingDesc.Usage = ResourceUsage.Staging;
+                stagingDesc.BindFlags = BindFlags.None;
+                stagingDesc.CpuAccessFlags = CpuAccessFlags.Read;
+                stagingDesc.SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0);
 
                 using (var stagingTexture = new SharpDX.Direct3D11.Texture2D(device, stagingDesc))
                 {
-                    // Handle multisampled backbuffer
+                    // Handle multisampled source texture
                     if (desc.SampleDescription.Count > 1)
                     {
                         // Create resolved texture first
@@ -1878,7 +1900,7 @@ namespace CodeWalker
                         using (var resolvedTexture = new SharpDX.Direct3D11.Texture2D(device, resolvedDesc))
                         {
                             // Resolve multisampling
-                            context.ResolveSubresource(backBuffer, 0, resolvedTexture, 0, desc.Format);
+                            context.ResolveSubresource(sourceTexture, 0, resolvedTexture, 0, desc.Format);
                             // Copy to staging
                             context.CopyResource(resolvedTexture, stagingTexture);
                         }
@@ -1886,7 +1908,7 @@ namespace CodeWalker
                     else
                     {
                         // Direct copy for non-multisampled
-                        context.CopyResource(backBuffer, stagingTexture);
+                        context.CopyResource(sourceTexture, stagingTexture);
                     }
 
                     // Map staging texture to read pixels
@@ -1894,7 +1916,7 @@ namespace CodeWalker
 
                     try
                     {
-                        return ProcessScreenshotData(filePath, dataBox, desc.Width, desc.Height);
+                        return ProcessTransparentScreenshotData(filePath, dataBox, desc.Width, desc.Height);
                     }
                     finally
                     {
@@ -1908,7 +1930,7 @@ namespace CodeWalker
             }
         }
 
-        private unsafe bool ProcessScreenshotData(string filePath, SharpDX.DataBox dataBox, int width, int height)
+        private unsafe bool ProcessTransparentScreenshotData(string filePath, SharpDX.DataBox dataBox, int width, int height)
         {
             try
             {
@@ -1924,41 +1946,171 @@ namespace CodeWalker
                         var sourcePtr = dataBox.DataPointer;
                         var destPtr = bitmapData.Scan0;
 
-                        // First pass: copy all pixel data
-                        for (int y = 0; y < height; y++)
-                        {
-                            byte* srcRow = (byte*)sourcePtr + y * dataBox.RowPitch;
-                            byte* dstRow = (byte*)destPtr + y * bitmapData.Stride;
-
-                            for (int x = 0; x < width; x++)
-                            {
-                                // DirectX uses BGRA format, but we need to swap R and B channels for correct colors
-                                dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; // R (from DirectX B channel)
-                                dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; // G (same)
-                                dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; // B (from DirectX R channel)
-                                dstRow[x * 4 + 3] = 255; // A - start opaque
-                            }
-                        }
-
-                        // Second pass: professional background removal
-                        if (isTransparentScreenshotMode)
-                        {
-                            RemoveBackground(destPtr, width, height, bitmapData.Stride);
-                        }
+                        // Process pixels with native transparency support
+                        ProcessTransparentPixels(sourcePtr, destPtr, width, height, dataBox.RowPitch, bitmapData.Stride);
                     }
                     finally
                     {
                         bitmap.UnlockBits(bitmapData);
                     }
 
-                    // Save as PNG
-                    bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
-                    return true;
+                    // Auto-crop to fit clothing perfectly
+                    using (var finalBitmap = AutoCropToFitClothing(bitmap))
+                    {
+                        // Save as PNG with alpha channel
+                        finalBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                        return true;
+                    }
                 }
             }
             catch (Exception)
             {
                 return false;
+            }
+        }
+
+        private unsafe void ProcessTransparentPixels(IntPtr sourcePtr, IntPtr destPtr, int width, int height, int sourcePitch, int destStride)
+        {
+            byte* srcBytes = (byte*)sourcePtr;
+            byte* dstBytes = (byte*)destPtr;
+
+            for (int y = 0; y < height; y++)
+            {
+                byte* srcRow = srcBytes + y * sourcePitch;
+                byte* dstRow = dstBytes + y * destStride;
+
+                for (int x = 0; x < width; x++)
+                {
+                    // DirectX SceneColour format is RGBA (R32G32B32A32_Float converted to bytes)
+                    byte r = srcRow[x * 4 + 0]; // Red
+                    byte g = srcRow[x * 4 + 1]; // Green  
+                    byte b = srcRow[x * 4 + 2]; // Blue
+                    byte a = srcRow[x * 4 + 3]; // Alpha
+
+                    // When we render with transparent background, the background areas should
+                    // already have alpha = 0, and solid objects should have alpha > 0
+                    // But DirectX doesn't always handle this perfectly, so we need to check
+                    
+                    // Check if this pixel matches the transparent clear color exactly
+                    bool isTransparentBackground = (r == 0 && g == 0 && b == 0 && a == 0);
+                    
+                    // Also check for the background color in case transparency didn't work
+                    // Original blue background: RGB(51, 102, 153) = (0.2, 0.4, 0.6) * 255
+                    bool isBackgroundColor = (Math.Abs(r - 51) <= 5 && Math.Abs(g - 102) <= 5 && Math.Abs(b - 153) <= 5) ||
+                                           (Math.Abs(r - 153) <= 5 && Math.Abs(g - 102) <= 5 && Math.Abs(b - 51) <= 5); // Handle R/B swap
+                    
+                    if (isTransparentBackground || isBackgroundColor)
+                    {
+                        // Make completely transparent
+                        dstRow[x * 4 + 0] = 0; // B
+                        dstRow[x * 4 + 1] = 0; // G
+                        dstRow[x * 4 + 2] = 0; // R
+                        dstRow[x * 4 + 3] = 0; // A
+                    }
+                    else
+                    {
+                        // System.Drawing.Bitmap expects BGRA format, so swap R and B from DirectX RGBA
+                        dstRow[x * 4 + 0] = b; // B (swapped from position 2)
+                        dstRow[x * 4 + 1] = g; // G (same position)
+                        dstRow[x * 4 + 2] = r; // R (swapped from position 0)
+                        dstRow[x * 4 + 3] = 255; // A - full opacity for clothing
+                    }
+                }
+            }
+        }
+
+        private System.Drawing.Bitmap AutoCropToFitClothing(System.Drawing.Bitmap originalBitmap)
+        {
+            try
+            {
+                // Find the bounding box of all non-transparent pixels
+                int minX = originalBitmap.Width;
+                int minY = originalBitmap.Height;
+                int maxX = -1;
+                int maxY = -1;
+
+                var bitmapData = originalBitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, originalBitmap.Width, originalBitmap.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                try
+                {
+                    unsafe
+                    {
+                        byte* pixels = (byte*)bitmapData.Scan0;
+
+                        // Scan all pixels to find the bounding box of opaque content
+                        for (int y = 0; y < originalBitmap.Height; y++)
+                        {
+                            for (int x = 0; x < originalBitmap.Width; x++)
+                            {
+                                byte* pixel = pixels + y * bitmapData.Stride + x * 4;
+                                byte alpha = pixel[3]; // Alpha channel
+
+                                // If pixel is not transparent (alpha > threshold)
+                                if (alpha > 10) // Small threshold to handle anti-aliasing
+                                {
+                                    minX = Math.Min(minX, x);
+                                    minY = Math.Min(minY, y);
+                                    maxX = Math.Max(maxX, x);
+                                    maxY = Math.Max(maxY, y);
+                                }
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    originalBitmap.UnlockBits(bitmapData);
+                }
+
+                // Check if we found any content
+                if (maxX == -1 || maxY == -1)
+                {
+                    // No opaque content found, return original
+                    return new System.Drawing.Bitmap(originalBitmap);
+                }
+
+                // Calculate content dimensions
+                int contentWidth = maxX - minX + 1;
+                int contentHeight = maxY - minY + 1;
+
+                // Calculate the size of the square needed to contain the content
+                int squareSize = Math.Max(contentWidth, contentHeight);
+
+                // Add some padding (10% of the square size, minimum 20 pixels)
+                int padding = Math.Max(squareSize / 10, 20);
+                squareSize += padding * 2;
+
+                // Calculate center of the content
+                int contentCenterX = minX + contentWidth / 2;
+                int contentCenterY = minY + contentHeight / 2;
+
+                // Calculate crop position to center the content in the square
+                int cropX = contentCenterX - squareSize / 2;
+                int cropY = contentCenterY - squareSize / 2;
+
+                // Ensure crop rectangle stays within original image bounds
+                cropX = Math.Max(0, Math.Min(cropX, originalBitmap.Width - squareSize));
+                cropY = Math.Max(0, Math.Min(cropY, originalBitmap.Height - squareSize));
+
+                // Adjust square size if it extends beyond image bounds
+                squareSize = Math.Min(squareSize, Math.Min(originalBitmap.Width - cropX, originalBitmap.Height - cropY));
+
+                // Create the cropped bitmap
+                var cropRect = new System.Drawing.Rectangle(cropX, cropY, squareSize, squareSize);
+                var croppedBitmap = originalBitmap.Clone(cropRect, originalBitmap.PixelFormat);
+
+                UpdateStatus($"Auto-cropped to {squareSize}x{squareSize} square (content: {contentWidth}x{contentHeight}, padding: {padding}px)");
+                
+                return croppedBitmap;
+            }
+            catch (Exception ex)
+            {
+                LogError($"Auto-crop failed: {ex.Message}");
+                // Return original bitmap if cropping fails
+                return new System.Drawing.Bitmap(originalBitmap);
             }
         }
 
@@ -2025,9 +2177,11 @@ namespace CodeWalker
                 queue.Enqueue((x, y - 1));
             }
 
-            // PHASE 2: Handle transparent textures (fishnet, lace, mesh, etc.)
-            // Make ALL remaining background-colored pixels transparent, regardless of position
-            // This handles holes/gaps in clothing that show background through transparency
+            // PHASE 2: Analyze cloth content for blue colors before removing background colors from interior
+            bool clothContainsBlue = AnalyzeClothForBlueContent(pixels, width, height, stride, visited, bgColor);
+
+            // PHASE 3: Handle transparent textures (fishnet, lace, mesh, etc.)
+            // Make ALL remaining background-colored pixels transparent, but be more careful if cloth contains blue
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -2036,14 +2190,110 @@ namespace CodeWalker
                     {
                         var currentColor = GetPixelColor(pixels, x, y, stride);
                         
+                        // If cloth contains blue colors, use much stricter matching to avoid removing cloth
+                        int tolerance = clothContainsBlue ? 8 : 15; // Much stricter if cloth has blue
+                        
+                        // Also, if cloth contains blue, add additional checks to ensure we're not removing cloth colors
+                        if (clothContainsBlue && IsLikelyClothBlue(currentColor, bgColor))
+                        {
+                            // Skip this pixel - it's likely part of the cloth design
+                            continue;
+                        }
+                        
                         // Use stricter tolerance for internal transparency to avoid removing clothing
-                        if (ColorsMatch(currentColor, bgColor, 15)) // Stricter tolerance (15 instead of 25)
+                        if (ColorsMatch(currentColor, bgColor, tolerance))
                         {
                             SetPixelTransparent(pixels, x, y, stride);
                         }
                     }
                 }
             }
+        }
+
+        private unsafe bool AnalyzeClothForBlueContent(byte* pixels, int width, int height, int stride, bool[,] visited, (byte r, byte g, byte b) bgColor)
+        {
+            int totalClothPixels = 0;
+            int blueClothPixels = 0;
+            
+            // Sample the cloth (non-transparent, non-background pixels) to see if blue is prominent
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!visited[x, y]) // Not background/transparent
+                    {
+                        var currentColor = GetPixelColor(pixels, x, y, stride);
+                        
+                        // Skip if this is clearly background color
+                        if (ColorsMatch(currentColor, bgColor, 15))
+                            continue;
+                            
+                        totalClothPixels++;
+                        
+                        // Check if this pixel has significant blue content
+                        // A pixel is considered "blue" if:
+                        // 1. Blue channel is higher than red and green channels
+                        // 2. Blue channel is above a threshold
+                        // 3. The color is not too close to the background blue
+                        if (IsBlueishClothColor(currentColor, bgColor))
+                        {
+                            blueClothPixels++;
+                        }
+                    }
+                }
+            }
+            
+            // If more than 10% of cloth pixels contain blue, consider the cloth to have blue content
+            if (totalClothPixels > 0)
+            {
+                double blueRatio = (double)blueClothPixels / totalClothPixels;
+                return blueRatio > 0.1; // 10% threshold
+            }
+            
+            return false;
+        }
+        
+        private bool IsBlueishClothColor((byte r, byte g, byte b) color, (byte r, byte g, byte b) bgColor)
+        {
+            // Check if this color has significant blue content that's different from background
+            // Don't consider it blue cloth if it's too similar to the background color
+            if (ColorsMatch(color, bgColor, 20))
+                return false;
+                
+            // Must have blue as the dominant or co-dominant color channel
+            if (color.b < color.r - 20 && color.b < color.g - 20)
+                return false;
+                
+            // Must have sufficient blue intensity
+            if (color.b < 80) // Minimum blue threshold
+                return false;
+                
+            return true;
+        }
+        
+        private bool IsLikelyClothBlue((byte r, byte g, byte b) color, (byte r, byte g, byte b) bgColor)
+        {
+            // This method determines if a blue-ish color is likely part of the cloth design
+            // rather than background bleeding through
+            
+            // If the color is very close to background, it's probably background
+            if (ColorsMatch(color, bgColor, 10))
+                return false;
+                
+            // If blue is dominant and the color is saturated enough, it's likely cloth
+            if (IsBlueishClothColor(color, bgColor))
+            {
+                // Additional check: if the color has good saturation/contrast, it's likely a deliberate color choice
+                int maxChannel = Math.Max(Math.Max(color.r, color.g), color.b);
+                int minChannel = Math.Min(Math.Min(color.r, color.g), color.b);
+                int contrast = maxChannel - minChannel;
+                
+                // If there's good contrast between channels, it's likely a deliberate color choice
+                if (contrast > 30)
+                    return true;
+            }
+            
+            return false;
         }
 
         private unsafe (byte r, byte g, byte b) GetPixelColor(byte* pixels, int x, int y, int stride)
@@ -2096,17 +2346,47 @@ namespace CodeWalker
 
         private void SetTransparentBackground(bool transparent)
         {
+            isTransparentRenderingMode = transparent;
+            
             if (transparent)
             {
-                // Keep the original background color - we'll use depth buffer for transparency
-                // No need to change clear color for depth-based approach
+                // Set the clear color to transparent
+                var transparentColor = new Color(0.0f, 0.0f, 0.0f, 0.0f);
+                Renderer.DXMan.SetClearColour(transparentColor);
+                
+                // Enable transparent background in existing rendering pipeline components
+                if (Renderer.shaders?.DefScene != null)
+                {
+                    Renderer.shaders.DefScene.UseTransparentBackground = true;
+                }
+                
+                if (Renderer.shaders?.HDR != null)
+                {
+                    Renderer.shaders.HDR.UseTransparentBackground = true;
+                }
+                
+                // Note: If DefScene or HDR are null, they will be created later by ShaderManager.BeginFrame()
+                // and we'll need to set their transparent flags at that time
             }
             else
             {
-                // Restore original clear color if needed
+                // Restore original clear color
                 Renderer.DXMan.SetClearColour(originalClearColour);
+                
+                // Disable transparent background in rendering pipeline components
+                if (Renderer.shaders?.DefScene != null)
+                {
+                    Renderer.shaders.DefScene.UseTransparentBackground = false;
+                }
+                
+                if (Renderer.shaders?.HDR != null)
+                {
+                    Renderer.shaders.HDR.UseTransparentBackground = false;
+                }
             }
         }
+        
+
 
         public void FocusOnSelectedDrawable()
         {

@@ -153,6 +153,12 @@ namespace CodeWalker.Rendering
         float ElapsedTime = 0.0f;
         public float LumBlendSpeed = 1.0f;
 
+        // Add support for transparent background rendering
+        public bool UseTransparentBackground { get; set; } = false;
+
+        // Public access to Primary texture for screenshots
+        public GpuTexture PrimaryTexture { get { return Primary; } }
+
         bool CS_FULL_PIXEL_REDUCTION = false;
 
         public long VramUsage
@@ -419,8 +425,10 @@ namespace CodeWalker.Rendering
 
         public void Clear(DeviceContext context)
         {
-            Color4 clearColour = new Color4(0.2f, 0.4f, 0.6f, 0.0f);
-            //Color4 clearColour = new Color4(0.0f, 0.0f, 0.0f, 0.0f);
+            // Use transparent background for screenshots, otherwise use default blue
+            Color4 clearColour = UseTransparentBackground 
+                ? new Color4(0.0f, 0.0f, 0.0f, 0.0f)  // Transparent
+                : new Color4(0.2f, 0.4f, 0.6f, 0.0f); // Default blue
 
             Primary.Clear(context, clearColour);
         }
