@@ -22,6 +22,7 @@ using System.IO;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Material.Icons.WPF;
+using System.Threading;
 
 namespace grzyClothTool.Controls
 {
@@ -576,6 +577,26 @@ namespace grzyClothTool.Controls
                     
                     border.ToolTip = tooltipPanel;
                     
+                    // Subscribe to property changed event to clear tooltip when relevant properties change
+                    PropertyChangedEventHandler propertyChangedHandler = null;
+                    propertyChangedHandler = (s, args) =>
+                    {
+                        if (args.PropertyName == nameof(drawable.Name) || 
+                            args.PropertyName == nameof(drawable.TypeName) || 
+                            args.PropertyName == nameof(drawable.SexName) ||
+                            args.PropertyName == nameof(drawable.Number))
+                        {
+                            // Clear the tooltip so it will be recreated with updated info on next hover
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                border.ToolTip = null;
+                                // Unsubscribe to prevent memory leaks
+                                drawable.PropertyChanged -= propertyChangedHandler;
+                            });
+                        }
+                    };
+                    drawable.PropertyChanged += propertyChangedHandler;
+                    
                     // Load details asynchronously and update tooltip when ready
                     _ = Task.Run(async () =>
                     {
@@ -622,6 +643,98 @@ namespace grzyClothTool.Controls
             // {
             //     border.ToolTip = null;
             // }
+        }
+
+        private async void TakeScreenshot_Click(object sender, RoutedEventArgs e)
+        {
+            if (!MainWindow.AddonManager.IsPreviewEnabled)
+            {
+                CustomMessageBox.Show("Preview window is not open. Please open the 3D preview first.", "Take Screenshot", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            var selectedDrawable = DrawableListSelectedValue as GDrawable;
+            if (selectedDrawable == null)
+            {
+                CustomMessageBox.Show("No drawable selected.", "Take Screenshot", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            if (selectedDrawable.Textures == null || selectedDrawable.Textures.Count == 0)
+            {
+                CustomMessageBox.Show("Selected drawable has no textures.", "Take Screenshot", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            try
+            {
+                string genderCode = selectedDrawable.Sex == Enums.SexType.male ? "M" : "F";
+                string gameIdString = selectedDrawable.DisplayNumberWithOffset;
+
+                for (int i = 0; i < selectedDrawable.Textures.Count; i++)
+                {
+                    var texture = selectedDrawable.Textures[i];
+                    
+                    // Update the preview to show current texture
+                    MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
+                    CWHelper.SendDrawableUpdateToPreview(new DrawableUpdatedArgs
+                    {
+                        UpdatedName = "TextureChanged",
+                        Value = texture.DisplayName
+                    });
+
+                    // Wait for preview to update
+                    await Task.Delay(200);
+
+                    // Generate filename with the specified format
+                    string filename = $"{genderCode}_{selectedDrawable.TypeNumeric}_{gameIdString}_{i}.png";
+
+                    // Take the screenshot with custom filename
+                    bool success = CWHelper.TakeScreenshot(selectedDrawable.Name, filename);
+
+                    if (!success)
+                    {
+                        CustomMessageBox.Show($"Failed to capture screenshot for texture {i + 1}: {texture.DisplayName}", 
+                            "Screenshot Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                    }
+                }
+
+                CustomMessageBox.Show($"Successfully captured {selectedDrawable.Textures.Count} screenshot(s) for {selectedDrawable.Name}", 
+                    "Screenshots Complete", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Error during screenshot process: {ex.Message}", "Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+        }
+
+        private void FocusCamera_Click(object sender, RoutedEventArgs e)
+        {
+            if (!MainWindow.AddonManager.IsPreviewEnabled)
+            {
+                CustomMessageBox.Show("Preview window is not open. Please open the 3D preview first.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            var selectedDrawable = DrawableListSelectedValue as GDrawable;
+            if (selectedDrawable == null)
+            {
+                CustomMessageBox.Show("No drawable selected.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            try
+            {
+                bool success = CWHelper.FocusCameraOnDrawable();
+                if (!success)
+                {
+                    CustomMessageBox.Show("Failed to focus camera. Make sure the preview window is active.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                }
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Error focusing camera: {ex.Message}", "Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
         }
     }
 

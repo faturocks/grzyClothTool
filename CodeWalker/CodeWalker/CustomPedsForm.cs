@@ -16,11 +16,48 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using Color = SharpDX.Color;
+using System.Runtime.InteropServices;
 
 namespace CodeWalker
 {
     public partial class CustomPedsForm : Form, DXForm
     {
+        // Win32 API declarations for fallback screenshot
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool BitBlt(IntPtr hdc, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindowDC(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteDC(IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        private const uint SRCCOPY = 0x00CC0020;
+
         public Form Form { get { return this; } } //for DXForm/DXManager use
 
         public Renderer Renderer = null;
@@ -103,6 +140,17 @@ namespace CodeWalker
         private System.Windows.Forms.Timer autoRotateTimer;
         private float autoRotateAngle = 0f;
         private const float AutoRotateSpeed = 1.0f;
+
+        private bool originalToolsPanelVisibility = false;
+        private bool originalOnlySelectedState = false;
+        private Color originalClearColour;
+        private bool isTransparentScreenshotMode = false;
+        
+        // Fields for resolution management
+        private bool isFixedResolutionMode = false;
+        private int originalWidth = 0;
+        private int originalHeight = 0;
+        private const int FIXED_SCREENSHOT_RESOLUTION = 1024;
 
         public class ComponentComboItem
         {
@@ -602,14 +650,25 @@ namespace CodeWalker
         {
             //move the camera to a default place where the given sphere is fully visible.
 
-            rad = Math.Max(0.01f, rad*0.1f);
+            // Improved distance calculation for better framing
+            // Ensure minimum radius for very small items
+            rad = Math.Max(rad, 0.5f);
+            
+            // Calculate distance based on bounding sphere with proper scaling
+            // This ensures the object fills most of the screen but with appropriate padding
+            float distance = rad * 2.5f; // Increased multiplier for better distance
+            
+            // Ensure minimum distance to prevent being too close
+            distance = Math.Max(distance, 1.5f);
+            
+            // Ensure maximum distance for very large items
+            distance = Math.Min(distance, 15.0f);
 
             camera.FollowEntity.Position = pos;
-            camera.TargetDistance = rad * 1.2f;
-            camera.CurrentDistance = rad * 1.2f;
+            camera.TargetDistance = distance;
+            camera.CurrentDistance = distance;
 
             camera.UpdateProj = true;
-
         }
         private void AddDrawableTreeNode(DrawableBase drawable, string name, bool check)
         {
@@ -1681,6 +1740,489 @@ namespace CodeWalker
         private void RestartCamera_Click(object sender, EventArgs e)
         {
             SetDefaultCameraPosition();
+        }
+
+        public bool TakeScreenshot(string drawableName, string customFilename = null)
+        {
+            try
+            {
+                // Store original states
+                originalToolsPanelVisibility = ToolsPanel.Visible;
+                originalOnlySelectedState = OnlySelectedCheckBox.Checked;
+                originalClearColour = Renderer.DXMan.clearcolour;
+
+                // Set fixed resolution for consistent screenshots
+                SetFixedResolution();
+
+                // Configure interface for screenshot
+                ToolsPanel.Visible = false; // Hide tools panel
+                OnlySelectedCheckBox.Checked = true; // Show only selected drawable
+                
+                // Enable transparent screenshot mode
+                isTransparentScreenshotMode = true;
+                
+                // Focus camera on selected drawable for optimal framing
+                FocusOnSelectedDrawable();
+                
+                // Give the camera and resolution change a moment to settle
+                System.Threading.Thread.Sleep(300);
+
+                // Create screenshot directory if it doesn't exist
+                string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
+                Directory.CreateDirectory(screenshotDir);
+
+                // Generate filename
+                string fileName;
+                if (!string.IsNullOrEmpty(customFilename))
+                {
+                    fileName = customFilename;
+                }
+                else
+                {
+                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    fileName = $"{drawableName}_{timestamp}";
+                }
+                
+                if (!fileName.EndsWith(".png"))
+                {
+                    fileName += ".png";
+                }
+
+                string filePath = Path.Combine(screenshotDir, fileName);
+
+                // Attempt DirectX screenshot first, then fallback to GDI
+                bool success = false;
+                string method = "Unknown";
+
+                // Try DirectX method first
+                try
+                {
+                    success = TakeDirectXScreenshot(filePath);
+                    if (success)
+                    {
+                        method = "DirectX";
+                    }
+                }
+                catch (Exception dxEx)
+                {
+                    LogError($"DirectX screenshot failed: {dxEx.Message}");
+                }
+
+                // Fallback to GDI method if DirectX failed
+                if (!success)
+                {
+                    // GDI method implementation would go here if needed
+                    // For now, we'll focus on the DirectX method
+                    LogError("Screenshot capture failed");
+                    return false;
+                }
+
+                // Update status with method used and camera positioning info
+                UpdateStatus($"Screenshot saved using {method} method at {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION} with auto-focus: {filePath}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogError($"Screenshot error: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                // Always restore original settings
+                RestoreOriginalSettings();
+            }
+        }
+
+        private bool TakeDirectXScreenshot(string filePath)
+        {
+            try
+            {
+                // Validate DirectX is ready
+                if (Renderer?.DXMan?.device == null || Renderer?.DXMan?.context == null || Renderer?.DXMan?.backbuffer == null)
+                {
+                    return false;
+                }
+
+                var device = Renderer.DXMan.device;
+                var context = Renderer.DXMan.context;
+                var backBuffer = Renderer.DXMan.backbuffer;
+
+                // Get backbuffer description
+                var desc = backBuffer.Description;
+
+                // Create staging texture for CPU access
+                var stagingDesc = new SharpDX.Direct3D11.Texture2DDescription()
+                {
+                    Width = desc.Width,
+                    Height = desc.Height,
+                    MipLevels = 1,
+                    ArraySize = 1,
+                    Format = desc.Format,
+                    SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0), // No multisampling for staging
+                    Usage = SharpDX.Direct3D11.ResourceUsage.Staging,
+                    BindFlags = SharpDX.Direct3D11.BindFlags.None,
+                    CpuAccessFlags = SharpDX.Direct3D11.CpuAccessFlags.Read,
+                    OptionFlags = SharpDX.Direct3D11.ResourceOptionFlags.None
+                };
+
+                using (var stagingTexture = new SharpDX.Direct3D11.Texture2D(device, stagingDesc))
+                {
+                    // Handle multisampled backbuffer
+                    if (desc.SampleDescription.Count > 1)
+                    {
+                        // Create resolved texture first
+                        var resolvedDesc = desc;
+                        resolvedDesc.SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0);
+
+                        using (var resolvedTexture = new SharpDX.Direct3D11.Texture2D(device, resolvedDesc))
+                        {
+                            // Resolve multisampling
+                            context.ResolveSubresource(backBuffer, 0, resolvedTexture, 0, desc.Format);
+                            // Copy to staging
+                            context.CopyResource(resolvedTexture, stagingTexture);
+                        }
+                    }
+                    else
+                    {
+                        // Direct copy for non-multisampled
+                        context.CopyResource(backBuffer, stagingTexture);
+                    }
+
+                    // Map staging texture to read pixels
+                    var dataBox = context.MapSubresource(stagingTexture, 0, SharpDX.Direct3D11.MapMode.Read, SharpDX.Direct3D11.MapFlags.None);
+
+                    try
+                    {
+                        return ProcessScreenshotData(filePath, dataBox, desc.Width, desc.Height);
+                    }
+                    finally
+                    {
+                        context.UnmapSubresource(stagingTexture, 0);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private unsafe bool ProcessScreenshotData(string filePath, SharpDX.DataBox dataBox, int width, int height)
+        {
+            try
+            {
+                using (var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    var bitmapData = bitmap.LockBits(
+                        new System.Drawing.Rectangle(0, 0, width, height),
+                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                        System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                    try
+                    {
+                        var sourcePtr = dataBox.DataPointer;
+                        var destPtr = bitmapData.Scan0;
+
+                        // First pass: copy all pixel data
+                        for (int y = 0; y < height; y++)
+                        {
+                            byte* srcRow = (byte*)sourcePtr + y * dataBox.RowPitch;
+                            byte* dstRow = (byte*)destPtr + y * bitmapData.Stride;
+
+                            for (int x = 0; x < width; x++)
+                            {
+                                // DirectX uses BGRA format, but we need to swap R and B channels for correct colors
+                                dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; // R (from DirectX B channel)
+                                dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; // G (same)
+                                dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; // B (from DirectX R channel)
+                                dstRow[x * 4 + 3] = 255; // A - start opaque
+                            }
+                        }
+
+                        // Second pass: professional background removal
+                        if (isTransparentScreenshotMode)
+                        {
+                            RemoveBackground(destPtr, width, height, bitmapData.Stride);
+                        }
+                    }
+                    finally
+                    {
+                        bitmap.UnlockBits(bitmapData);
+                    }
+
+                    // Save as PNG
+                    bitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private unsafe void RemoveBackground(IntPtr bitmapData, int width, int height, int stride)
+        {
+            // Professional background removal for solid backgrounds AND transparent textures
+            
+            // Sample the background color from the corners (they should be background)
+            byte* pixels = (byte*)bitmapData;
+            
+            // Sample from all four corners and use the most common color
+            var corner1 = GetPixelColor(pixels, 0, 0, stride);
+            var corner2 = GetPixelColor(pixels, width - 1, 0, stride);
+            var corner3 = GetPixelColor(pixels, 0, height - 1, stride);
+            var corner4 = GetPixelColor(pixels, width - 1, height - 1, stride);
+
+            // Use corner1 as reference background color (usually the most reliable)
+            var bgColor = corner1;
+
+            // PHASE 1: Traditional edge-based flood fill for main background removal
+            bool[,] visited = new bool[width, height];
+            Queue<(int x, int y)> queue = new Queue<(int, int)>();
+
+            // Start flood fill from all edges
+            for (int x = 0; x < width; x++)
+            {
+                // Top edge
+                queue.Enqueue((x, 0));
+                // Bottom edge  
+                queue.Enqueue((x, height - 1));
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                // Left edge
+                queue.Enqueue((0, y));
+                // Right edge
+                queue.Enqueue((width - 1, y));
+            }
+
+            // Flood fill algorithm for connected background areas
+            while (queue.Count > 0)
+            {
+                var (x, y) = queue.Dequeue();
+
+                if (x < 0 || x >= width || y < 0 || y >= height || visited[x, y])
+                    continue;
+
+                var currentColor = GetPixelColor(pixels, x, y, stride);
+                
+                // Check if this pixel matches background color (with tolerance)
+                if (!ColorsMatch(currentColor, bgColor, 25)) // 25 = tolerance for anti-aliasing
+                    continue;
+
+                visited[x, y] = true;
+
+                // Make this pixel transparent
+                SetPixelTransparent(pixels, x, y, stride);
+
+                // Add neighbors to queue
+                queue.Enqueue((x + 1, y));
+                queue.Enqueue((x - 1, y));
+                queue.Enqueue((x, y + 1));
+                queue.Enqueue((x, y - 1));
+            }
+
+            // PHASE 2: Handle transparent textures (fishnet, lace, mesh, etc.)
+            // Make ALL remaining background-colored pixels transparent, regardless of position
+            // This handles holes/gaps in clothing that show background through transparency
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!visited[x, y]) // Only check pixels not already processed by flood fill
+                    {
+                        var currentColor = GetPixelColor(pixels, x, y, stride);
+                        
+                        // Use stricter tolerance for internal transparency to avoid removing clothing
+                        if (ColorsMatch(currentColor, bgColor, 15)) // Stricter tolerance (15 instead of 25)
+                        {
+                            SetPixelTransparent(pixels, x, y, stride);
+                        }
+                    }
+                }
+            }
+        }
+
+        private unsafe (byte r, byte g, byte b) GetPixelColor(byte* pixels, int x, int y, int stride)
+        {
+            byte* pixel = pixels + y * stride + x * 4;
+            return (pixel[0], pixel[1], pixel[2]); // RGB after our color correction
+        }
+
+        private unsafe void SetPixelTransparent(byte* pixels, int x, int y, int stride)
+        {
+            byte* pixel = pixels + y * stride + x * 4;
+            pixel[0] = 0; // R
+            pixel[1] = 0; // G
+            pixel[2] = 0; // B
+            pixel[3] = 0; // A
+        }
+
+        private bool ColorsMatch((byte r, byte g, byte b) color1, (byte r, byte g, byte b) color2, int tolerance)
+        {
+            return Math.Abs(color1.r - color2.r) <= tolerance &&
+                   Math.Abs(color1.g - color2.g) <= tolerance &&
+                   Math.Abs(color1.b - color2.b) <= tolerance;
+        }
+
+        private void RestoreOriginalSettings()
+        {
+            try
+            {
+                // Restore transparent background
+                if (isTransparentScreenshotMode)
+                {
+                    SetTransparentBackground(false);
+                    isTransparentScreenshotMode = false;
+                }
+
+                // Restore tools panel visibility
+                ToolsPanel.Visible = originalToolsPanelVisibility;
+                
+                // Restore only selected state
+                OnlySelectedCheckBox.Checked = originalOnlySelectedState;
+                
+                // Restore original resolution if it was changed
+                RestoreOriginalResolution();
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Error restoring settings: {ex.Message}");
+            }
+        }
+
+        private void SetTransparentBackground(bool transparent)
+        {
+            if (transparent)
+            {
+                // Keep the original background color - we'll use depth buffer for transparency
+                // No need to change clear color for depth-based approach
+            }
+            else
+            {
+                // Restore original clear color if needed
+                Renderer.DXMan.SetClearColour(originalClearColour);
+            }
+        }
+
+        public void FocusOnSelectedDrawable()
+        {
+            try
+            {
+                // Set fixed resolution for consistent camera positioning
+                SetFixedResolution();
+                
+                // First try to get from loaded drawables (from clothing tool)
+                Drawable targetDrawable = null;
+                Vector3 boundingCenter = Vector3.Zero;
+                float boundingSphereRadius = 1.0f;
+
+                if (LoadedDrawables.Count > 0)
+                {
+                    // Use the first loaded drawable (most recently selected from cloth tool)
+                    targetDrawable = LoadedDrawables.Values.FirstOrDefault();
+                }
+                else if (Renderer.SelectedDrawable != null)
+                {
+                    // Fallback to renderer's selected drawable
+                    targetDrawable = Renderer.SelectedDrawable as Drawable;
+                }
+                
+                if (targetDrawable != null)
+                {
+                    boundingCenter = targetDrawable.BoundingCenter;
+                    boundingSphereRadius = targetDrawable.BoundingSphereRadius;
+                }
+                else
+                {
+                    // If no specific drawable, focus on the overall ped with some default positioning
+                    boundingCenter = Vector3.Zero;
+                    boundingSphereRadius = 2.0f;
+                    UpdateStatus("No specific drawable selected, focusing on default position");
+                    MoveCameraToView(boundingCenter, boundingSphereRadius);
+                    
+                    // Restore resolution after a short delay
+                    Task.Delay(1000).ContinueWith(_ => RestoreOriginalResolution());
+                    return;
+                }
+
+                // Adjust for different clothing types - some clothing items are positioned differently
+                Vector3 adjustedCenter = boundingCenter;
+                
+                // Apply a small vertical offset to center clothing items better
+                adjustedCenter.Z += boundingSphereRadius * 0.1f;
+
+                // Ensure minimum radius for very small items
+                float adjustedRadius = Math.Max(boundingSphereRadius, 0.5f);
+
+                // Move camera to optimal viewing position
+                MoveCameraToView(adjustedCenter, adjustedRadius);
+
+                // Update status
+                UpdateStatus($"Camera focused on clothing item: {targetDrawable?.Name ?? "Unknown"} at {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION} (Center: {adjustedCenter:F2}, Radius: {adjustedRadius:F2})");
+                
+                // Restore resolution after a short delay to allow viewing
+                Task.Delay(1000).ContinueWith(_ => RestoreOriginalResolution());
+            }
+            catch (Exception ex)
+            {
+                LogError($"Error focusing camera on drawable: {ex.Message}");
+                // Fallback to default camera position
+                SetDefaultCameraPosition();
+                // Restore resolution in case of error
+                RestoreOriginalResolution();
+            }
+        }
+
+        private void SetFixedResolution()
+        {
+            try
+            {
+                if (isFixedResolutionMode) return; // Already in fixed mode
+
+                // Store original resolution
+                originalWidth = ClientSize.Width;
+                originalHeight = ClientSize.Height;
+                isFixedResolutionMode = true;
+
+                // Set form to fixed resolution
+                Size = new System.Drawing.Size(FIXED_SCREENSHOT_RESOLUTION + (Width - ClientSize.Width), 
+                                             FIXED_SCREENSHOT_RESOLUTION + (Height - ClientSize.Height));
+                
+                // Force render buffers to resize
+                Renderer.BuffersResized(FIXED_SCREENSHOT_RESOLUTION, FIXED_SCREENSHOT_RESOLUTION);
+                
+                UpdateStatus($"Set fixed resolution: {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"Error setting fixed resolution: {ex.Message}");
+            }
+        }
+
+        private void RestoreOriginalResolution()
+        {
+            try
+            {
+                if (!isFixedResolutionMode) return; // Not in fixed mode
+
+                // Restore original size
+                Size = new System.Drawing.Size(originalWidth + (Width - ClientSize.Width), 
+                                             originalHeight + (Height - ClientSize.Height));
+                
+                // Force render buffers to resize back to original
+                Renderer.BuffersResized(originalWidth, originalHeight);
+                
+                isFixedResolutionMode = false;
+                UpdateStatus("Restored original resolution");
+            }
+            catch (Exception ex)
+            {
+                LogError($"Error restoring resolution: {ex.Message}");
+            }
         }
     }
 }

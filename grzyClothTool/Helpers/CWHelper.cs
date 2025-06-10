@@ -189,4 +189,58 @@ public static class CWHelper
             );
         }
     }
+
+    public static bool TakeScreenshot(string drawableName, string customFilename = null)
+    {
+        try
+        {
+            if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
+            {
+                return false;
+            }
+
+            // Use reflection to call the method to avoid compilation issues
+            var method = CWForm.GetType().GetMethod("TakeScreenshot", new[] { typeof(string), typeof(string) });
+            if (method != null)
+            {
+                var result = method.Invoke(CWForm, new object[] { drawableName, customFilename });
+                return result is bool success && success;
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Screenshot functionality not available in this version of CodeWalker
+            System.Diagnostics.Debug.WriteLine($"Screenshot failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public static bool FocusCameraOnDrawable()
+    {
+        try
+        {
+            if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
+            {
+                return false;
+            }
+
+            // Use reflection to call the method to avoid compilation issues
+            var method = CWForm.GetType().GetMethod("FocusOnSelectedDrawable", Type.EmptyTypes);
+            if (method != null)
+            {
+                method.Invoke(CWForm, null);
+                return true;
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Camera focus functionality not available
+            System.Diagnostics.Debug.WriteLine($"Camera focus failed: {ex.Message}");
+            return false;
+        }
+    }
 }

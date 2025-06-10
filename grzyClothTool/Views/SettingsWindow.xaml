@@ -125,6 +125,18 @@
                                     <c:SettingsLabelTextBox Grid.Row="1" Grid.Column="2" Label="Low LOD" LabelFontSize="12" Text="{Binding Path=Instance.PolygonLimitLow, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" ButtonVisible="False" />
                                 </Grid>
                             </GroupBox>
+                            
+                            <GroupBox Margin="0,5" Style="{DynamicResource FixedGroupBox}">
+                                <GroupBox.Header>
+                                    <TextBlock FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Brush950}" Text="Drawable Type Offsets" />
+                                </GroupBox.Header>
+                                <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel x:Name="OffsetConfigPanel" Margin="5" Loaded="OffsetConfigPanel_Loaded">
+                                        <TextBlock Padding="0,0,0,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Configure offset values for each drawable type. The displayed number will be: Offset + Previous addons count + Actual number + 1</TextBlock>
+                                        <!-- Offset controls will be added dynamically in code-behind -->
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </GroupBox>
                         </StackPanel>
                         <StackPanel Grid.Column="1">
                             <c:SettingsLabelCheckBox IsEnabled="false" Margin="5" Label="Load GTA5 file cache on tool startup" Text="Enabled will make 3D preview load faster, but tool will load longer on startup. (Not implemented yet)" CheckBoxClick="CacheSettings_Click" IsChecked="{Binding CacheStartupIsChecked, Mode=OneWay}" />

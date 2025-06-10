@@ -118,5 +118,17 @@ namespace grzyClothTool.Properties {
                 this["MarkNewDrawables"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string DrawableTypeOffsets {
+            get {
+                return ((string)(this["DrawableTypeOffsets"]));
+            }
+            set {
+                this["DrawableTypeOffsets"] = value;
+            }
+        }
     }
 }

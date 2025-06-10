@@ -357,6 +357,16 @@ namespace CodeWalker.Rendering
             //ctx.Rasterizer.State = RasterizerStateSolid;
         }
 
+        public void SetClearColour(Color color)
+        {
+            clearcolour = color;
+        }
+
+        public void RestoreDefaultClearColour()
+        {
+            clearcolour = new Color(0.2f, 0.4f, 0.6f, 1.0f);
+        }
+
 
 
 

@@ -42,6 +42,162 @@ namespace grzyClothTool.Views
             DataContext = this;
         }
 
+        private void OffsetConfigPanel_Loaded(object sender, RoutedEventArgs e)
+        {
+            CreateOffsetControls();
+        }
+
+        private void CreateOffsetControls()
+        {
+            var panel = FindName("OffsetConfigPanel") as StackPanel;
+            if (panel == null) return;
+            
+            // Clear existing controls except the description text
+            var description = panel.Children[0];
+            panel.Children.Clear();
+            panel.Children.Add(description);
+
+            // Add header row
+            CreateHeaderRow(panel);
+
+            // Add component types
+            var componentTypes = EnumHelper.GetDrawableTypeList();
+            foreach (var componentType in componentTypes)
+            {
+                CreateOffsetControlRow(panel, componentType, false);
+            }
+
+            // Add separator
+            var separator = new Separator { Margin = new Thickness(0, 10, 0, 10) };
+            panel.Children.Add(separator);
+
+            // Add prop types
+            var propTypes = EnumHelper.GetPropTypeList();
+            foreach (var propType in propTypes)
+            {
+                CreateOffsetControlRow(panel, propType, true);
+            }
+        }
+
+        private void CreateHeaderRow(StackPanel parent)
+        {
+            var headerGrid = new Grid { Margin = new Thickness(0, 5, 0, 2) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Type name
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) }); // Male textbox
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) }); // Female textbox
+
+            // Type header
+            var typeHeader = new TextBlock
+            {
+                Text = "Type",
+                FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0)
+            };
+            Grid.SetColumn(typeHeader, 0);
+
+            // Male header
+            var maleHeader = new TextBlock
+            {
+                Text = "Male",
+                FontWeight = FontWeights.Bold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(maleHeader, 1);
+
+            // Female header
+            var femaleHeader = new TextBlock
+            {
+                Text = "Female",
+                FontWeight = FontWeights.Bold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(femaleHeader, 2);
+
+            headerGrid.Children.Add(typeHeader);
+            headerGrid.Children.Add(maleHeader);
+            headerGrid.Children.Add(femaleHeader);
+            parent.Children.Add(headerGrid);
+            
+            // Add a separator line under the header
+            var headerSeparator = new Separator { Margin = new Thickness(0, 2, 0, 5) };
+            parent.Children.Add(headerSeparator);
+        }
+
+        private void CreateOffsetControlRow(StackPanel parent, string typeName, bool isProp)
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Type name
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) }); // Male textbox
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) }); // Female textbox
+
+            // Type name label
+            var typeLabel = new TextBlock
+            {
+                Text = $"{(isProp ? "Prop" : "Component")}: {typeName}",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 2, 10, 2)
+            };
+            Grid.SetColumn(typeLabel, 0);
+
+            // Male textbox
+            var maleTextBox = new TextBox
+            {
+                Text = SettingsHelper.Instance.GetDrawableTypeOffset(typeName, isProp, Enums.SexType.male).ToString(),
+                Width = 70,
+                Margin = new Thickness(0, 2, 5, 2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                ToolTip = "Male offset"
+            };
+            Grid.SetColumn(maleTextBox, 1);
+
+            // Female textbox
+            var femaleTextBox = new TextBox
+            {
+                Text = SettingsHelper.Instance.GetDrawableTypeOffset(typeName, isProp, Enums.SexType.female).ToString(),
+                Width = 70,
+                Margin = new Thickness(5, 2, 0, 2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                ToolTip = "Female offset"
+            };
+            Grid.SetColumn(femaleTextBox, 2);
+
+            // Handle male textbox changes
+            maleTextBox.LostFocus += (s, e) =>
+            {
+                if (int.TryParse(maleTextBox.Text, out int offset))
+                {
+                    SettingsHelper.Instance.SetDrawableTypeOffset(typeName, isProp, Enums.SexType.male, offset);
+                }
+                else
+                {
+                    // Reset to current value if invalid
+                    maleTextBox.Text = SettingsHelper.Instance.GetDrawableTypeOffset(typeName, isProp, Enums.SexType.male).ToString();
+                }
+            };
+
+            // Handle female textbox changes
+            femaleTextBox.LostFocus += (s, e) =>
+            {
+                if (int.TryParse(femaleTextBox.Text, out int offset))
+                {
+                    SettingsHelper.Instance.SetDrawableTypeOffset(typeName, isProp, Enums.SexType.female, offset);
+                }
+                else
+                {
+                    // Reset to current value if invalid
+                    femaleTextBox.Text = SettingsHelper.Instance.GetDrawableTypeOffset(typeName, isProp, Enums.SexType.female).ToString();
+                }
+            };
+
+            grid.Children.Add(typeLabel);
+            grid.Children.Add(maleTextBox);
+            grid.Children.Add(femaleTextBox);
+            parent.Children.Add(grid);
+        }
+
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {
             if (MainWindow.AddonManager.Addons.Count > 0)

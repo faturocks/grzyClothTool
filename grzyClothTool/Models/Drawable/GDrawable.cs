@@ -123,6 +123,46 @@ public class GDrawable : INotifyPropertyChanged
     public int Number { get; set; }
     public string DisplayNumber => (Number % GlobalConstants.MAX_DRAWABLES_IN_ADDON).ToString("D3");
 
+    public string DisplayNumberWithOffset
+    {
+        get
+        {
+            try
+            {
+                // Get offset for this drawable type and sex
+                var offset = SettingsHelper.Instance.GetDrawableTypeOffset(TypeName, IsProp, Sex);
+                
+                // Calculate count from previous addons of the same type
+                var previousAddonsCount = 0;
+                
+                // Safety check for MainWindow.AddonManager
+                if (MainWindow.AddonManager?.Addons != null && MainWindow.AddonManager.SelectedAddon != null)
+                {
+                    var currentAddonIndex = MainWindow.AddonManager.Addons.IndexOf(MainWindow.AddonManager.SelectedAddon);
+                    
+                    for (int i = 0; i < currentAddonIndex; i++)
+                    {
+                        var addon = MainWindow.AddonManager.Addons[i];
+                        previousAddonsCount += addon.Drawables.Count(d => 
+                            d.TypeNumeric == TypeNumeric && 
+                            d.IsProp == IsProp && 
+                            d.Sex == Sex);
+                    }
+                }
+                
+                // Calculate final number: Offset + Previous addons count + Current number + 1
+                var finalNumber = offset + previousAddonsCount + Number + 1;
+                
+                return finalNumber.ToString("D3");
+            }
+            catch
+            {
+                // Fallback to regular display number if there's any error
+                return DisplayNumber;
+            }
+        }
+    }
+
     private GDrawableDetails _details;
     public GDrawableDetails Details
     {
@@ -428,6 +468,11 @@ public class GDrawable : INotifyPropertyChanged
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    public void NotifyDisplayNumberWithOffsetChanged()
+    {
+        OnPropertyChanged(nameof(DisplayNumberWithOffset));
     }
 
     private async Task<GDrawableDetails?> LoadDrawableDetailsWithConcurrencyControl()
