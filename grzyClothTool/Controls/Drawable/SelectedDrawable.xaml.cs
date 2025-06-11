@@ -587,45 +587,38 @@ namespace grzyClothTool.Controls
 
         private void MoveDrawableToPosition(TextBox textBox)
         {
-            if (MainWindow.AddonManager.SelectedAddon.SelectedDrawable == null || textBox == null)
-                return;
-
             var drawable = MainWindow.AddonManager.SelectedAddon.SelectedDrawable;
-            
+            if (drawable == null) return;
+
             if (!int.TryParse(textBox.Text, out int newPosition))
             {
-                // Reset to current position if invalid input
+                // Reset to original value if invalid input
                 textBox.Text = drawable.Number.ToString();
                 return;
             }
 
-            // Get drawables of the same type
             var drawables = MainWindow.AddonManager.SelectedAddon.Drawables;
-            var sameTypeDrawables = drawables.Where(x => x.IsProp == drawable.IsProp && x.Sex == drawable.Sex && x.TypeNumeric == drawable.TypeNumeric).ToList();
-            
-            // Validate position range
-            if (newPosition < 0 || newPosition >= sameTypeDrawables.Count)
+            int oldIndex = drawables.IndexOf(drawable);
+            int newIndex = -1;
+
+            // Find the target index based on the new position
+            for (int i = 0; i < drawables.Count; i++)
             {
-                // Reset to current position if out of range
+                if (drawables[i].Number == newPosition)
+                {
+                    newIndex = i;
+                    break;
+                }
+            }
+
+            if (newIndex == -1 || newIndex == oldIndex)
+            {
+                // Reset to original value if position not found or no change
                 textBox.Text = drawable.Number.ToString();
                 return;
             }
 
-            // Find the current position in the filtered list
-            int oldPosition = sameTypeDrawables.IndexOf(drawable);
-            
-            if (oldPosition == newPosition)
-            {
-                // No change needed
-                return;
-            }
-
-            // Get the target drawable at the new position
-            var targetDrawable = sameTypeDrawables[newPosition];
-            
-            // Find their indices in the main collection
-            int oldIndex = drawables.IndexOf(drawable);
-            int newIndex = drawables.IndexOf(targetDrawable);
+            int oldPosition = drawable.Number;
 
             // Move the drawable using the same logic as drag and drop
             if (oldIndex < newIndex)
@@ -653,6 +646,515 @@ namespace grzyClothTool.Controls
             textBox.Text = drawable.Number.ToString();
             
             SaveHelper.SetUnsavedChanges(true);
+        }
+
+        private async Task<bool> WaitForScreenshotFile(string filename, int timeoutMs = 5000)
+        {
+            // Get the expected file path where screenshots are saved
+            string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
+            string filePath = Path.Combine(screenshotDir, filename);
+
+            // Wait for the file to exist with polling
+            int elapsedMs = 0;
+            const int pollIntervalMs = 50;
+
+            while (elapsedMs < timeoutMs)
+            {
+                if (File.Exists(filePath))
+                {
+                    // File exists, now wait a bit more to ensure it's fully written
+                    await Task.Delay(100);
+                    
+                    // Double-check by trying to open the file (ensures it's not locked)
+                    try
+                    {
+                        using (var fileStream = File.OpenRead(filePath))
+                        {
+                            // If we can open it, the file is fully written
+                            return true;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // File is still being written, wait a bit more
+                        await Task.Delay(pollIntervalMs);
+                        elapsedMs += pollIntervalMs;
+                        continue;
+                    }
+                }
+
+                await Task.Delay(pollIntervalMs);
+                elapsedMs += pollIntervalMs;
+            }
+
+            // Timeout reached
+            return false;
+        }
+
+        private async void TakeAllScreenshots_Click(object sender, RoutedEventArgs e)
+        {
+            if (!MainWindow.AddonManager.IsPreviewEnabled)
+            {
+                CustomMessageBox.Show("Preview window is not open. Please open the 3D preview first.", "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            // Show category selection dialog (same as DELETE HIGH POLYGON MODELS)
+            var includedCategories = ShowCategorySelectionDialog();
+            if (includedCategories == null) // User cancelled
+                return;
+
+            // Collect all drawables from selected categories
+            var drawablesToScreenshot = new List<GDrawable>();
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                foreach (var drawable in addon.Drawables)
+                {
+                    // Skip if drawable category is not included
+                    if (!ShouldIncludeCategory(drawable, includedCategories))
+                        continue;
+
+                    // Skip reserved drawables
+                    if (drawable.IsReserved)
+                        continue;
+
+                    // Skip if no textures
+                    if (drawable.Textures == null || drawable.Textures.Count == 0)
+                        continue;
+
+                    drawablesToScreenshot.Add(drawable);
+                }
+            }
+
+            if (drawablesToScreenshot.Count == 0)
+            {
+                CustomMessageBox.Show("No eligible clothes found in the selected categories.", "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                return;
+            }
+
+            // Calculate total screenshots that will be taken
+            int totalScreenshots = drawablesToScreenshot.Sum(d => d.Textures.Count);
+
+            var message = $"This will take {totalScreenshots} screenshot(s) from {drawablesToScreenshot.Count} drawable(s).\n\n" +
+                         "Included categories: " + string.Join(", ", includedCategories) + "\n\n" +
+                         "Each texture variation will be captured automatically.\n\n" +
+                         "Do you want to continue?";
+
+            var result = CustomMessageBox.Show(message, "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.YesNo);
+            if (result != CustomMessageBox.CustomMessageBoxResult.Yes)
+                return;
+
+            try
+            {
+                int successCount = 0;
+                int totalCount = 0;
+
+                foreach (var drawable in drawablesToScreenshot)
+                {
+                    // Properly simulate UI selection by updating the SelectedDrawables collection
+                    // This replicates what happens when user clicks on a drawable in the list
+                    MainWindow.AddonManager.SelectedAddon.SelectedDrawables.Clear();
+                    MainWindow.AddonManager.SelectedAddon.SelectedDrawables.Add(drawable);
+                    MainWindow.AddonManager.SelectedAddon.SelectedDrawable = drawable;
+                    
+                    // Set the first texture as selected (same as what happens in UI selection)
+                    if (drawable.Textures.Count > 0)
+                    {
+                        MainWindow.AddonManager.SelectedAddon.SelectedTexture = drawable.Textures.First();
+                    }
+                    
+                    // Create proper selection changed event args to simulate UI click
+                    var drawableSelectionArgs = new SelectionChangedEventArgs(
+                        System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
+                        new GDrawable[] { }, // removed items
+                        new GDrawable[] { drawable } // added items
+                    );
+                    
+                    // Send drawable update to preview (same as when user clicks on drawable)
+                    CWHelper.SendDrawableUpdateToPreview(drawableSelectionArgs);
+                    
+                    // Wait for the drawable to load in preview
+                    await Task.Delay(600);
+
+                    string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
+                    string gameIdString = drawable.DisplayNumberWithOffset;
+
+                    for (int i = 0; i < drawable.Textures.Count; i++)
+                    {
+                        var texture = drawable.Textures[i];
+                        totalCount++;
+
+                        // Simulate user selecting the texture in UI
+                        MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
+
+                        // Create proper selection changed event args for texture
+                        var textureSelectionArgs = new SelectionChangedEventArgs(
+                            System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
+                            new GTexture[] { }, // removed items  
+                            new GTexture[] { texture } // added items
+                        );
+
+                        // Send texture update to preview (same mechanism as SelectedDrawable_TextureChanged)
+                        if (MainWindow.AddonManager.IsPreviewEnabled)
+                        {
+                            var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
+                            var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
+                            CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
+                            CWHelper.CWForm.Refresh();
+                        }
+                        
+                        // Wait for texture to load and preview to update
+                        await Task.Delay(400);
+
+                        // Generate filename with the specified format
+                        string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
+
+                        // Take screenshot using regular method for now - the setup/restore issue needs CodeWalker modification
+                        bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
+
+                        if (success)
+                        {
+                            // Wait for the screenshot file to be actually saved to disk
+                            bool fileSaved = await WaitForScreenshotFile(filename);
+                            if (fileSaved)
+                            {
+                                successCount++;
+                            }
+                            else
+                            {
+                                LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
+                            }
+                        }
+
+                        // Small delay between screenshots
+                        await Task.Delay(100);
+                    }
+
+                    // Additional delay between drawables to ensure proper loading
+                    await Task.Delay(300);
+
+                    // Clean up memory for the previous drawable before moving to next one
+                    CleanupDrawableMemory(drawable);
+                }
+
+                CustomMessageBox.Show($"Successfully captured {successCount} out of {totalCount} screenshot(s).", 
+                    "Screenshots Complete", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+
+                LogHelper.Log($"Automated screenshot process completed: {successCount}/{totalCount} successful", LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Error during automated screenshot process: {ex.Message}", "Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                LogHelper.Log($"Automated screenshot error: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private List<string> ShowCategorySelectionDialog()
+        {
+            var dialog = new CategorySelectionDialog();
+            dialog.Title = "Select Categories for Screenshots";
+            var result = dialog.ShowDialog();
+            
+            if (result == true)
+            {
+                return dialog.IncludedCategories;
+            }
+            
+            return null; // User cancelled
+        }
+
+        private bool ShouldIncludeCategory(GDrawable drawable, List<string> includedCategories)
+        {
+            if (drawable.IsProp && includedCategories.Contains("props"))
+                return true;
+
+            if (!drawable.IsProp && includedCategories.Contains(drawable.TypeName?.ToLower()))
+                return true;
+
+            return false;
+        }
+
+        private class CodeWalkerOriginalSettings
+        {
+            public bool OriginalToolsPanelVisibility;
+            public bool OriginalOnlySelectedState;
+            public System.Drawing.Color OriginalClearColour;
+            public bool OriginalTransparentMode;
+        }
+
+        private CodeWalkerOriginalSettings SetupCodeWalkerForBatch()
+        {
+            var settings = new CodeWalkerOriginalSettings();
+            
+            try
+            {
+                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
+                {
+                    return settings;
+                }
+
+                var cwFormType = CWHelper.CWForm.GetType();
+
+                // Store original states
+                var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (toolsPanelField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.Control toolsPanel)
+                {
+                    settings.OriginalToolsPanelVisibility = toolsPanel.Visible;
+                    toolsPanel.Visible = false; // Hide tools panel
+                }
+
+                var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (onlySelectedField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
+                {
+                    settings.OriginalOnlySelectedState = onlySelectedCheckBox.Checked;
+                    onlySelectedCheckBox.Checked = true; // Check "Only Selected Drawable"
+                }
+
+                // Store original renderer clear colour
+                var rendererField = cwFormType.GetField("Renderer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (rendererField?.GetValue(CWHelper.CWForm) != null)
+                {
+                    var renderer = rendererField.GetValue(CWHelper.CWForm);
+                    var dxManField = renderer.GetType().GetField("DXMan", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (dxManField?.GetValue(renderer) != null)
+                    {
+                        var dxMan = dxManField.GetValue(renderer);
+                        var clearColourField = dxMan.GetType().GetField("clearcolour", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (clearColourField != null)
+                        {
+                            settings.OriginalClearColour = (System.Drawing.Color)clearColourField.GetValue(dxMan);
+                        }
+                    }
+                }
+
+                // Store and set transparent mode
+                var transparentModeField = cwFormType.GetField("isTransparentScreenshotMode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (transparentModeField != null)
+                {
+                    settings.OriginalTransparentMode = (bool)transparentModeField.GetValue(CWHelper.CWForm);
+                    transparentModeField.SetValue(CWHelper.CWForm, true);
+                }
+
+                // Set fixed resolution for screenshots - ONCE
+                var setFixedResolutionMethod = cwFormType.GetMethod("SetFixedResolution", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                setFixedResolutionMethod?.Invoke(CWHelper.CWForm, null);
+
+                LogHelper.Log("CodeWalker setup for batch screenshots completed", LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Failed to setup CodeWalker for batch: {ex.Message}", LogType.Error);
+            }
+
+            return settings;
+        }
+
+        private bool TakeCoreScreenshot(string drawableName, string customFilename)
+        {
+            try
+            {
+                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
+                {
+                    return false;
+                }
+
+                // Create screenshot directory if it doesn't exist
+                string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
+                Directory.CreateDirectory(screenshotDir);
+
+                // Generate full file path
+                string fileName = customFilename;
+                if (!fileName.EndsWith(".png"))
+                {
+                    fileName += ".png";
+                }
+                string filePath = Path.Combine(screenshotDir, fileName);
+
+                // Focus camera on current drawable
+                CWHelper.FocusCameraOnDrawable();
+                
+                // Small delay for camera to settle  
+                System.Threading.Thread.Sleep(100);
+
+                // Call ONLY the absolute core capture method - ProcessTransparentScreenshotData
+                var cwFormType = CWHelper.CWForm.GetType();
+                
+                // Try to access the renderer directly and capture without any setup/teardown
+                var rendererField = cwFormType.GetField("Renderer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (rendererField?.GetValue(CWHelper.CWForm) != null)
+                {
+                    var renderer = rendererField.GetValue(CWHelper.CWForm);
+                    var rendererType = renderer.GetType();
+                    
+                    // Try to get the device context and capture directly
+                    var deviceField = rendererType.GetField("Device", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    var contextField = rendererType.GetField("DeviceContext", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    
+                    if (deviceField?.GetValue(renderer) != null && contextField?.GetValue(renderer) != null)
+                    {
+                        // This is the most direct approach - manually capture the backbuffer
+                        return CaptureBackbufferDirectly(filePath, renderer);
+                    }
+                }
+                
+                // Fallback: Use reflection to call ProcessTransparentScreenshotData directly if available
+                var processMethod = cwFormType.GetMethod("ProcessTransparentScreenshotData", 
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (processMethod != null)
+                {
+                    // This method should not trigger any resolution changes
+                    LogHelper.Log("Using ProcessTransparentScreenshotData method", LogType.Info);
+                    // We would need the correct parameters for this method
+                    return false; // Need to implement parameter gathering
+                }
+
+                LogHelper.Log("No suitable core capture method found", LogType.Warning);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Core screenshot failed: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
+
+                private bool CaptureBackbufferDirectly(string filePath, object renderer)
+        {
+            try
+            {
+                // SIMPLE APPROACH: Just call regular screenshot method since we already setup CodeWalker
+                // The setup was done once, so this should work without restoration messages
+                return CWHelper.TakeScreenshot("temp", System.IO.Path.GetFileName(filePath));
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Simple screenshot capture failed: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
+
+        private bool SaveBackbufferAsPng(object backBuffer, string filePath, object context)
+        {
+            try
+            {
+                // This is getting very complex for direct D3D11 texture saving
+                // Let's use a simpler approach - just save what's currently rendered
+                
+                // For now, let's just return false and use a different approach
+                LogHelper.Log("Direct backbuffer saving not implemented", LogType.Warning);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Backbuffer save failed: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
+
+        private void RestoreCodeWalkerSettings(CodeWalkerOriginalSettings settings)
+        {
+            try
+            {
+                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
+                {
+                    return;
+                }
+
+                var cwFormType = CWHelper.CWForm.GetType();
+
+                // Restore tools panel visibility
+                var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (toolsPanelField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.Control toolsPanel)
+                {
+                    toolsPanel.Visible = settings.OriginalToolsPanelVisibility;
+                }
+
+                // Restore only selected checkbox
+                var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (onlySelectedField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
+                {
+                    onlySelectedCheckBox.Checked = settings.OriginalOnlySelectedState;
+                }
+
+                // Restore transparent mode
+                var transparentModeField = cwFormType.GetField("isTransparentScreenshotMode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (transparentModeField != null)
+                {
+                    transparentModeField.SetValue(CWHelper.CWForm, settings.OriginalTransparentMode);
+                }
+
+                // Restore original resolution
+                var restoreOriginalMethod = cwFormType.GetMethod("RestoreOriginalSettings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                restoreOriginalMethod?.Invoke(CWHelper.CWForm, null);
+
+                LogHelper.Log("CodeWalker settings restored after batch screenshots", LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Failed to restore CodeWalker settings: {ex.Message}", LogType.Error);
+            }
+        }
+
+        private void CleanupDrawableMemory(GDrawable drawable)
+        {
+            try
+            {
+                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
+                {
+                    return;
+                }
+
+                // Clean up loaded drawable from CodeWalker memory
+                if (CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
+                {
+                    var loadedDrawable = CWHelper.CWForm.LoadedDrawables[drawable.Name];
+                    
+                    // Clean up loaded textures for this drawable
+                    if (CWHelper.CWForm.LoadedTextures.ContainsKey(loadedDrawable))
+                    {
+                        // Remove from loaded textures dictionary
+                        CWHelper.CWForm.LoadedTextures.Remove(loadedDrawable);
+                    }
+                    
+                    // Remove from loaded drawables dictionary
+                    CWHelper.CWForm.LoadedDrawables.Remove(drawable.Name);
+                }
+
+                // Force garbage collection to free up GPU memory
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+
+                // Try to clear CodeWalker's renderer cache for better memory management
+                try
+                {
+                    var rendererField = CWHelper.CWForm.GetType().GetField("Renderer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (rendererField?.GetValue(CWHelper.CWForm) != null)
+                    {
+                        var renderer = rendererField.GetValue(CWHelper.CWForm);
+                        var cacheField = renderer.GetType().GetField("RenderableCache", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (cacheField?.GetValue(renderer) != null)
+                        {
+                            var cache = cacheField.GetValue(renderer);
+                            var clearMethod = cache.GetType().GetMethod("ClearCache", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                            clearMethod?.Invoke(cache, null);
+                        }
+                    }
+                }
+                catch 
+                { 
+                    // If we can't clear the cache, it's not critical
+                }
+
+                LogHelper.Log($"Cleaned up memory for drawable: {drawable.Name}", LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Error cleaning up memory for drawable {drawable.Name}: {ex.Message}", LogType.Warning);
+            }
         }
     }
 }
