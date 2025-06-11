@@ -130,5 +130,29 @@ namespace grzyClothTool.Properties {
                 this["DrawableTypeOffsets"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("1024x1024")]
+        public string RenderResolution {
+            get {
+                return ((string)(this["RenderResolution"]));
+            }
+            set {
+                this["RenderResolution"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("128x128")]
+        public string OutputResolution {
+            get {
+                return ((string)(this["OutputResolution"]));
+            }
+            set {
+                this["OutputResolution"] = value;
+            }
+        }
     }
 }

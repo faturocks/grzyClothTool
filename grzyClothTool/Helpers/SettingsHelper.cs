@@ -54,6 +54,20 @@ public class SettingsHelper : INotifyPropertyChanged
         set => SetProperty(ref _markNewDrawables, value, nameof(MarkNewDrawables));
     }
 
+    private string _renderResolution;
+    public string RenderResolution
+    {
+        get => _renderResolution;
+        set => SetProperty(ref _renderResolution, value, nameof(RenderResolution));
+    }
+
+    private string _outputResolution;
+    public string OutputResolution
+    {
+        get => _outputResolution;
+        set => SetProperty(ref _outputResolution, value, nameof(OutputResolution));
+    }
+
     private Dictionary<string, int> _drawableTypeOffsets = new();
 
     private SettingsHelper()
@@ -64,6 +78,8 @@ public class SettingsHelper : INotifyPropertyChanged
         _polygonLimitLow = Properties.Settings.Default.PolygonLimitLow;
         _autoDeleteFiles = Properties.Settings.Default.AutoDeleteFiles;
         _markNewDrawables = Properties.Settings.Default.MarkNewDrawables;
+        _renderResolution = Properties.Settings.Default.RenderResolution;
+        _outputResolution = Properties.Settings.Default.OutputResolution;
         LoadDrawableTypeOffsets();
     }
 

@@ -1769,8 +1769,11 @@ namespace CodeWalker
                 RenderModeComboBox.Text = "Vertex colour 2";
                 System.Diagnostics.Debug.WriteLine("Switched to Vertex Colour 2 mode");
                 
-                // Brief delay to ensure render mode change takes effect
-                System.Threading.Thread.Sleep(100);
+                // Longer delay to ensure render mode change takes effect completely
+                System.Threading.Thread.Sleep(200); // Increased from 100ms
+                this.Refresh(); // Force a refresh to ensure mode change is applied
+                System.Threading.Thread.Sleep(100); // Additional delay after refresh
+                System.Diagnostics.Debug.WriteLine("Render mode switch should be complete");
                 
                 // Capture the screen area for mask generation
                 System.Drawing.Rectangle clientBounds = this.ClientRectangle;
@@ -1816,9 +1819,15 @@ namespace CodeWalker
                 
                 System.Diagnostics.Debug.WriteLine($"Alpha mask cropped to {finalMask.Width}x{finalMask.Height} and cached");
                 
-                // Restore original render mode
+                // Restore original render mode for textured screenshots
                 RenderModeComboBox.Text = originalRenderMode;
-                System.Diagnostics.Debug.WriteLine($"Restored render mode to: {originalRenderMode}");
+                System.Diagnostics.Debug.WriteLine($"Restored render mode to: {originalRenderMode} for textured screenshots");
+                
+                // CRITICAL: Wait for render mode to switch back completely
+                System.Threading.Thread.Sleep(200); // Ensure mode switch completes
+                this.Refresh(); // Force refresh to apply mode change
+                System.Threading.Thread.Sleep(100); // Additional delay after refresh
+                System.Diagnostics.Debug.WriteLine($"Render mode switch back to {originalRenderMode} should be complete");
                 
                 System.Diagnostics.Debug.WriteLine($"=== GenerateAlphaMask END SUCCESS for: {clothName} ===");
                 
@@ -1991,14 +2000,16 @@ namespace CodeWalker
         }
 
         /// <summary>
-        /// Enhanced screenshot method with alpha mask support
+        /// Enhanced screenshot method using alpha mask for cleaner results
         /// For each cloth, generates alpha mask once in Vertex Colour 2 mode, then applies it to all texture variations
         /// </summary>
         /// <param name="filePath">Path to save the screenshot</param>
         /// <param name="clothName">Name of the cloth (used for alpha mask caching)</param>
         /// <param name="useAlphaMask">Whether to use alpha mask (true) or direct blue removal (false)</param>
+        /// <param name="renderResolution">Window resolution during capture (e.g., "1024x1024")</param>
+        /// <param name="outputResolution">Final image resolution (e.g., "128x128")</param>
         /// <returns>True if successful</returns>
-        public bool TakeGDIScreenshotWithAlphaMask(string filePath, string clothName = null, bool useAlphaMask = true)
+        public bool TakeGDIScreenshotWithAlphaMask(string filePath, string clothName = null, bool useAlphaMask = true, string renderResolution = null, string outputResolution = null)
         {
             try
             {
@@ -2006,48 +2017,44 @@ namespace CodeWalker
                 System.Diagnostics.Debug.WriteLine($"FilePath: {filePath}");
                 System.Diagnostics.Debug.WriteLine($"ClothName: {clothName}");
                 System.Diagnostics.Debug.WriteLine($"UseAlphaMask: {useAlphaMask}");
+                System.Diagnostics.Debug.WriteLine($"RenderResolution: {renderResolution}");
+                System.Diagnostics.Debug.WriteLine($"OutputResolution: {outputResolution}");
                 
-                // Check if this is the first texture (index 0) which should only generate alpha mask, not save screenshot
+                // Enable double-sided rendering for better screenshot quality
+                EnableDoubleSidedRendering();
+                
+                // Check if this is the first texture (index 0) - generate alpha mask for this cloth
                 bool isFirstTexture = !string.IsNullOrEmpty(filePath) && filePath.EndsWith("_0.png");
+                
                 if (isFirstTexture && useAlphaMask && !string.IsNullOrEmpty(clothName))
                 {
-                    System.Diagnostics.Debug.WriteLine("First texture detected - generating alpha mask only, not saving screenshot");
-                    System.Drawing.Bitmap firstTextureMask = GenerateAlphaMask(clothName);
-                    if (firstTextureMask != null)
+                    System.Diagnostics.Debug.WriteLine("🔄 FIRST TEXTURE: Generating alpha mask while cloth is visible");
+                    
+                    // Generate alpha mask NOW while the cloth is properly loaded and visible
+                    System.Drawing.Bitmap alphaMask = GenerateAlphaMask(clothName);
+                    if (alphaMask != null)
                     {
-                        System.Diagnostics.Debug.WriteLine("Alpha mask generated successfully for first texture");
-                        firstTextureMask.Dispose(); // We don't need to keep this reference, it's cached internally
-                        return true; // Return success but don't save a file
+                        alphaMask.Dispose(); // We only need it cached, not returned
+                        System.Diagnostics.Debug.WriteLine("✓ Alpha mask generated and cached for cloth while visible");
+                        
+                        // CRITICAL: Wait for render mode to fully switch back to textured mode
+                        System.Diagnostics.Debug.WriteLine("⏳ Waiting for render mode to switch back to textured mode...");
+                        System.Threading.Thread.Sleep(200); // Increased delay to ensure mode switch completes
+                        
+                        // Force a refresh to ensure the textured view is properly rendered
+                        this.Refresh();
+                        System.Threading.Thread.Sleep(100); // Additional delay after refresh
+                        
+                        System.Diagnostics.Debug.WriteLine("✓ Render mode should now be back to textured mode");
                     }
                     else
                     {
-                        System.Diagnostics.Debug.WriteLine("Failed to generate alpha mask for first texture");
-                        return false;
+                        System.Diagnostics.Debug.WriteLine("❌ Failed to generate alpha mask");
+                        useAlphaMask = false;
                     }
                 }
                 
-                // For non-first textures, get existing alpha mask from cache
-                System.Drawing.Bitmap alphaMask = null;
-                if (useAlphaMask && !string.IsNullOrEmpty(clothName))
-                {
-                    if (alphaMaskCache.ContainsKey(clothName))
-                    {
-                        alphaMask = alphaMaskCache[clothName];
-                        System.Diagnostics.Debug.WriteLine("Using cached alpha mask for texture variation");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine("No alpha mask found in cache, generating new one");
-                        alphaMask = GenerateAlphaMask(clothName);
-                        if (alphaMask == null)
-                        {
-                            System.Diagnostics.Debug.WriteLine("Failed to generate alpha mask, falling back to direct blue removal");
-                            useAlphaMask = false;
-                        }
-                    }
-                }
-                
-                // Continue with regular screenshot capture...
+                // Continue with regular screenshot capture for ALL textures (including index 0)
                 System.Drawing.Rectangle clientBounds = this.ClientRectangle;
                 System.Drawing.Bitmap fullBitmap = new System.Drawing.Bitmap(clientBounds.Width, clientBounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 
@@ -2077,14 +2084,37 @@ namespace CodeWalker
                     
                     // Apply transparency processing
                     System.Drawing.Bitmap finalBitmap;
-                    if (useAlphaMask && alphaMask != null)
+                    
+                    System.Diagnostics.Debug.WriteLine($"=== ALPHA MASK APPLICATION DEBUG ===");
+                    System.Diagnostics.Debug.WriteLine($"useAlphaMask: {useAlphaMask}");
+                    System.Diagnostics.Debug.WriteLine($"clothName: '{clothName}'");
+                    System.Diagnostics.Debug.WriteLine($"alphaMaskCache.Count: {alphaMaskCache.Count}");
+                    
+                    if (!string.IsNullOrEmpty(clothName))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"alphaMaskCache.ContainsKey('{clothName}'): {alphaMaskCache.ContainsKey(clothName)}");
+                        if (alphaMaskCache.ContainsKey(clothName))
+                        {
+                            var cachedMask = alphaMaskCache[clothName];
+                            System.Diagnostics.Debug.WriteLine($"Cached alpha mask size: {cachedMask?.Width}x{cachedMask?.Height}");
+                        }
+                        
+                        // List all keys in cache for debugging
+                        System.Diagnostics.Debug.WriteLine("All cache keys:");
+                        foreach (var key in alphaMaskCache.Keys)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"  - '{key}'");
+                        }
+                    }
+                    
+                    if (useAlphaMask && alphaMaskCache.ContainsKey(clothName))
                     {
                         // Use alpha mask approach with auto-cropping
-                        System.Diagnostics.Debug.WriteLine("Applying alpha mask with auto-cropping");
-                        finalBitmap = ApplyAlphaMaskAndCrop(processedBitmap, alphaMask, clothName);
+                        System.Diagnostics.Debug.WriteLine("✓ APPLYING ALPHA MASK with auto-cropping");
+                        finalBitmap = ApplyAlphaMaskAndCrop(processedBitmap, alphaMaskCache[clothName], clothName);
                         
                         // Remove any remaining blue pixels if they're minority (<30%)
-                        System.Diagnostics.Debug.WriteLine("Cleaning up remaining blue pixels");
+                        System.Diagnostics.Debug.WriteLine("✓ CLEANING UP remaining blue pixels");
                         int bluePixelsRemoved = RemoveBluePixelsIfMinority(finalBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
                         if (bluePixelsRemoved == -1)
                         {
@@ -2098,7 +2128,20 @@ namespace CodeWalker
                     else
                     {
                         // Use direct blue removal approach
-                        System.Diagnostics.Debug.WriteLine("Using direct blue removal");
+                        System.Diagnostics.Debug.WriteLine("⚠️ USING DIRECT BLUE REMOVAL (no alpha mask)");
+                        if (!useAlphaMask)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Reason: useAlphaMask is false");
+                        }
+                        else if (string.IsNullOrEmpty(clothName))
+                        {
+                            System.Diagnostics.Debug.WriteLine("Reason: clothName is null or empty");
+                        }
+                        else if (!alphaMaskCache.ContainsKey(clothName))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Reason: No alpha mask found for '{clothName}'");
+                        }
+                        
                         RemoveColorAndMakeTransparent(processedBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
                         finalBitmap = processedBitmap;
                     }
@@ -2110,10 +2153,22 @@ namespace CodeWalker
                         Directory.CreateDirectory(directory);
                     }
                     
-                    finalBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                    // Apply output resolution scaling if specified
+                    System.Drawing.Bitmap finalImageToSave = finalBitmap;
+                    if (!string.IsNullOrEmpty(outputResolution))
+                    {
+                        finalImageToSave = ScaleToOutputResolution(finalBitmap, outputResolution);
+                        System.Diagnostics.Debug.WriteLine($"Applied output resolution scaling to {outputResolution}");
+                    }
+                    
+                    finalImageToSave.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
                     System.Diagnostics.Debug.WriteLine($"Saved final image: {filePath}");
                     
                     // Clean up
+                    if (finalImageToSave != finalBitmap)
+                    {
+                        finalImageToSave.Dispose();
+                    }
                     if (finalBitmap != processedBitmap)
                     {
                         finalBitmap.Dispose();
@@ -2123,12 +2178,20 @@ namespace CodeWalker
                     System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshotWithAlphaMask END: {success} ===");
                     
                     fullBitmap.Dispose();
+                    
+                    // Restore original rendering settings
+                    RestoreOriginalRenderingSettings();
+                    
                     return success;
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"TakeGDIScreenshotWithAlphaMask exception: {ex.Message}");
+                
+                // Ensure rendering settings are restored even on exception
+                RestoreOriginalRenderingSettings();
+                
                 return false;
             }
         }
@@ -2146,6 +2209,9 @@ namespace CodeWalker
             try
             {
                 System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshot START for: {filePath} ===");
+                
+                // Enable double-sided rendering for better screenshot quality
+                EnableDoubleSidedRendering();
                 
                 // Ensure the form is visible and active
                 if (this.WindowState == FormWindowState.Minimized)
@@ -2262,34 +2328,45 @@ namespace CodeWalker
                         // Process the image to remove specific color and make it transparent
                         int pixelsProcessed = RemoveColorAndMakeTransparent(processedBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
                         System.Diagnostics.Debug.WriteLine($"Color processing completed, {pixelsProcessed} pixels made transparent");
-                        
-                        // Ensure directory exists
-                        string directory = Path.GetDirectoryName(filePath);
-                        if (!Directory.Exists(directory))
-                        {
-                            Directory.CreateDirectory(directory);
+                    
+                    // Ensure directory exists
+                    string directory = Path.GetDirectoryName(filePath);
+                    if (!Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
                             System.Diagnostics.Debug.WriteLine($"Created directory: {directory}");
-                        }
-                        
+                    }
+                    
                         // Save the processed screenshot with transparency
                         processedBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
                         System.Diagnostics.Debug.WriteLine($"Saved final processed image: {filePath}");
-                        
-                        // Verify file was created and has content
-                        if (File.Exists(filePath))
-                        {
-                            FileInfo fileInfo = new FileInfo(filePath);
+                    
+                    // Verify file was created and has content
+                    if (File.Exists(filePath))
+                    {
+                        FileInfo fileInfo = new FileInfo(filePath);
                             System.Diagnostics.Debug.WriteLine($"File verification: exists={File.Exists(filePath)}, size={fileInfo.Length} bytes");
-                            return fileInfo.Length > 0;
+                            
+                            // Restore rendering settings
+                            RestoreOriginalRenderingSettings();
+                            
+                        return fileInfo.Length > 0;
                         }
                         else
                         {
                             System.Diagnostics.Debug.WriteLine("ERROR: Final file was not created");
+                            
+                            // Restore rendering settings
+                            RestoreOriginalRenderingSettings();
                         }
                     }
                 }
                 
                 System.Diagnostics.Debug.WriteLine("=== TakeGDIScreenshot END (failed) ===");
+                
+                // Restore rendering settings
+                RestoreOriginalRenderingSettings();
+                
                 return false;
             }
             catch (Exception ex)
@@ -2298,6 +2375,10 @@ namespace CodeWalker
                 System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshot EXCEPTION ===");
                 System.Diagnostics.Debug.WriteLine($"Exception: {ex.GetType().Name}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                
+                // Ensure rendering settings are restored even on exception
+                RestoreOriginalRenderingSettings();
+                
                 return false;
             }
         }
@@ -2616,6 +2697,246 @@ namespace CodeWalker
             {
                 System.Diagnostics.Debug.WriteLine($"RemoveBluePixelsIfMinority exception: {ex.Message}");
                 return 0;
+            }
+        }
+
+        /// <summary>
+        /// Parses resolution string (e.g., "1024x1024") into width and height
+        /// </summary>
+        /// <param name="resolution">Resolution string in format "widthxheight"</param>
+        /// <returns>Tuple of (width, height), defaults to (1024, 1024) if parsing fails</returns>
+        private (int width, int height) ParseResolution(string resolution)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(resolution))
+                    return (1024, 1024);
+
+                string[] parts = resolution.ToLower().Split('x');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int width) && int.TryParse(parts[1], out int height))
+                {
+                    return (width, height);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ParseResolution exception: {ex.Message}");
+            }
+            
+            return (1024, 1024); // Default resolution
+        }
+
+        /// <summary>
+        /// Stores the original window size for restoration
+        /// </summary>
+        private System.Drawing.Size originalWindowSize = System.Drawing.Size.Empty;
+
+        /// <summary>
+        /// Sets the window size to the specified render resolution
+        /// </summary>
+        /// <param name="renderResolution">Resolution string in format "widthxheight"</param>
+        private void SetRenderResolution(string renderResolution)
+        {
+            try
+            {
+                if (originalWindowSize.IsEmpty)
+                {
+                    originalWindowSize = this.Size;
+                    System.Diagnostics.Debug.WriteLine($"Stored original window size: {originalWindowSize.Width}x{originalWindowSize.Height}");
+                }
+
+                var (width, height) = ParseResolution(renderResolution);
+                
+                if (this.Size.Width != width || this.Size.Height != height)
+                {
+                    this.Size = new System.Drawing.Size(width, height);
+                    System.Diagnostics.Debug.WriteLine($"Window resized to render resolution: {width}x{height}");
+                    
+                    // Give the renderer time to adjust to the new size
+                    System.Threading.Thread.Sleep(100);
+                    Application.DoEvents();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SetRenderResolution exception: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Restores the window to its original size
+        /// </summary>
+        private void RestoreOriginalResolution()
+        {
+            try
+            {
+                if (!originalWindowSize.IsEmpty)
+                {
+                    this.Size = originalWindowSize;
+                    System.Diagnostics.Debug.WriteLine($"Window restored to original size: {originalWindowSize.Width}x{originalWindowSize.Height}");
+                    
+                    // Give the renderer time to adjust to the restored size
+                    System.Threading.Thread.Sleep(100);
+                    Application.DoEvents();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"RestoreOriginalResolution exception: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Scales a bitmap to the specified output resolution
+        /// </summary>
+        /// <param name="source">Source bitmap to scale</param>
+        /// <param name="outputResolution">Target resolution string in format "widthxheight"</param>
+        /// <returns>Scaled bitmap</returns>
+        private System.Drawing.Bitmap ScaleToOutputResolution(System.Drawing.Bitmap source, string outputResolution)
+        {
+            try
+            {
+                var (targetWidth, targetHeight) = ParseResolution(outputResolution);
+                
+                if (source.Width == targetWidth && source.Height == targetHeight)
+                {
+                    return (System.Drawing.Bitmap)source.Clone();
+                }
+
+                System.Drawing.Bitmap scaled = new System.Drawing.Bitmap(targetWidth, targetHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                
+                using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(scaled))
+                {
+                    graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                    graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                    
+                    graphics.DrawImage(source, new System.Drawing.Rectangle(0, 0, targetWidth, targetHeight), 
+                                     new System.Drawing.Rectangle(0, 0, source.Width, source.Height), 
+                                     System.Drawing.GraphicsUnit.Pixel);
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"Image scaled from {source.Width}x{source.Height} to {targetWidth}x{targetHeight}");
+                return scaled;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ScaleToOutputResolution exception: {ex.Message}");
+                return (System.Drawing.Bitmap)source.Clone();
+            }
+        }
+
+        /// <summary>
+        /// Stores the original wireframe setting for restoration
+        /// </summary>
+        private bool originalWireframeSetting = false;
+        private bool wireframeBackupTaken = false;
+
+        /// <summary>
+        /// Enables double-sided rendering for better screenshot quality
+        /// This forces all geometry to use double-sided rasterizer states (CullMode.None)
+        /// </summary>
+        private void EnableDoubleSidedRendering()
+        {
+            try
+            {
+                if (Renderer?.shaders != null)
+                {
+                    // Store original wireframe setting
+                    if (!wireframeBackupTaken)
+                    {
+                        originalWireframeSetting = Renderer.shaders.wireframe;
+                        wireframeBackupTaken = true;
+                        System.Diagnostics.Debug.WriteLine($"Stored original wireframe setting: {originalWireframeSetting}");
+                    }
+
+                    // Force wireframe to false to use solid double-sided rendering
+                    // CodeWalker automatically uses rsSolidDblSided for cloth/cutout batches when wireframe is false
+                    Renderer.shaders.wireframe = false;
+                    System.Diagnostics.Debug.WriteLine("Double-sided rendering enabled for screenshots");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"EnableDoubleSidedRendering exception: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Restores the original rendering settings after screenshots
+        /// </summary>
+        private void RestoreOriginalRenderingSettings()
+        {
+            try
+            {
+                if (Renderer?.shaders != null && wireframeBackupTaken)
+                {
+                    Renderer.shaders.wireframe = originalWireframeSetting;
+                    wireframeBackupTaken = false;
+                    System.Diagnostics.Debug.WriteLine($"Restored original wireframe setting: {originalWireframeSetting}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"RestoreOriginalRenderingSettings exception: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Pre-generates alpha mask for a cloth and caches it for later use
+        /// This should be called BEFORE processing any texture indices
+        /// </summary>
+        /// <param name="clothName">Name of the cloth to generate alpha mask for</param>
+        /// <returns>True if alpha mask was generated and cached successfully</returns>
+        public bool PreGenerateAlphaMask(string clothName)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"=== PRE-GENERATE ALPHA MASK DEBUG ===");
+                System.Diagnostics.Debug.WriteLine($"Input clothName: '{clothName}'");
+                
+                if (string.IsNullOrEmpty(clothName))
+                {
+                    System.Diagnostics.Debug.WriteLine("⚠️ PreGenerateAlphaMask: clothName is null or empty");
+                    return false;
+                }
+                
+                // Check if alpha mask is already cached
+                if (alphaMaskCache.ContainsKey(clothName))
+                {
+                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask for '{clothName}' already exists in cache");
+                    var existingMask = alphaMaskCache[clothName];
+                    System.Diagnostics.Debug.WriteLine($"Existing mask size: {existingMask?.Width}x{existingMask?.Height}");
+                    return true;
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"🔄 Pre-generating alpha mask for cloth: {clothName}");
+                System.Diagnostics.Debug.WriteLine($"Current cache count before generation: {alphaMaskCache.Count}");
+                
+                // Generate the alpha mask (this will cache it internally)
+                System.Drawing.Bitmap alphaMask = GenerateAlphaMask(clothName);
+                
+                if (alphaMask != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask generated successfully: {alphaMask.Width}x{alphaMask.Height}");
+                    System.Diagnostics.Debug.WriteLine($"Cache count after generation: {alphaMaskCache.Count}");
+                    System.Diagnostics.Debug.WriteLine($"Cache contains key '{clothName}': {alphaMaskCache.ContainsKey(clothName)}");
+                    
+                    alphaMask.Dispose(); // We only need it cached, not the returned reference
+                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask pre-generated and cached for '{clothName}'");
+                    return true;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ Failed to pre-generate alpha mask for '{clothName}'");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ PreGenerateAlphaMask exception: {ex.Message}");
+                return false;
             }
         }
     }

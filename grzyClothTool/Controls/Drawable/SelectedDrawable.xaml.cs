@@ -755,106 +755,85 @@ namespace grzyClothTool.Controls
 
                 foreach (var drawable in drawablesToScreenshot)
                 {
-                    // Properly simulate UI selection by updating the SelectedDrawables collection
-                    // This replicates what happens when user clicks on a drawable in the list
-                    MainWindow.AddonManager.SelectedAddon.SelectedDrawables.Clear();
-                    MainWindow.AddonManager.SelectedAddon.SelectedDrawables.Add(drawable);
-                    MainWindow.AddonManager.SelectedAddon.SelectedDrawable = drawable;
-                    
-                    // Set the first texture as selected (same as what happens in UI selection)
-                    if (drawable.Textures.Count > 0)
+                    try
                     {
-                        MainWindow.AddonManager.SelectedAddon.SelectedTexture = drawable.Textures.First();
-                    }
-                    
-                    // Create proper selection changed event args to simulate UI click
-                    var drawableSelectionArgs = new SelectionChangedEventArgs(
-                        System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
-                        new GDrawable[] { }, // removed items
-                        new GDrawable[] { drawable } // added items
-                    );
-                    
-                    // Send drawable update to preview (same as when user clicks on drawable)
-                    CWHelper.SendDrawableUpdateToPreview(drawableSelectionArgs);
-                    
-                    // Brief wait for drawable to load (GDI is much faster)
-                    await Task.Delay(50);
+                        string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
+                        string gameIdString = drawable.DisplayNumberWithOffset;
 
-                    string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
-                    string gameIdString = drawable.DisplayNumberWithOffset;
-
-                    for (int i = 0; i < drawable.Textures.Count; i++)
-                    {
-                        var texture = drawable.Textures[i];
-                        totalCount++;
-
-                        // Simulate user selecting the texture in UI
-                        MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
-
-                        // Create proper selection changed event args for texture
-                        var textureSelectionArgs = new SelectionChangedEventArgs(
-                            System.Windows.Controls.Primitives.Selector.SelectionChangedEvent,
-                            new GTexture[] { }, // removed items  
-                            new GTexture[] { texture } // added items
-                        );
-
-                        // Send texture update to preview (same mechanism as SelectedDrawable_TextureChanged)
-                        if (MainWindow.AddonManager.IsPreviewEnabled)
+                        for (int i = 0; i < drawable.Textures.Count; i++)
                         {
-                            // Check if the drawable exists in LoadedDrawables before accessing it
-                            if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
+                            var texture = drawable.Textures[i];
+                            totalCount++;
+
+                            try
                             {
-                                // If drawable is not loaded, load it first
-                                var ydd = CWHelper.CreateYddFile(drawable);
-                                if (ydd != null && ydd.Drawables.Length > 0)
+                                // Update the preview to show current texture
+                                MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
+                                
+                                // Load the texture into the drawable
+                                if (texture != null)
                                 {
-                                    CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
+                                    // Check if the drawable exists in LoadedDrawables before accessing it
+                                    if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
+                                    {
+                                        // If drawable is not loaded, load it first
+                                        var ydd = CWHelper.CreateYddFile(drawable);
+                                        if (ydd != null && ydd.Drawables.Length > 0)
+                                        {
+                                            CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
+                                        }
+                                        else
+                                        {
+                                            continue; // Skip this texture if drawable can't be loaded
+                                        }
+                                    }
+
+                                    var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
+                                    var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
+                                    CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
+                                    CWHelper.CWForm.Refresh();
                                 }
-                                else
+                                
+                                // Brief wait for texture to load
+                                await Task.Delay(25);
+
+                                // Generate filename with the specified format
+                                string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
+
+                                // Take screenshot using GDI method
+                                bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
+                                LogHelper.Log($"Screenshot sonucu: {success} for {filename}", LogType.Info);
+
+                                if (success)
                                 {
-                                    continue; // Skip this texture if drawable can't be loaded
+                                    // Wait for the screenshot file to be actually saved to disk
+                                    bool fileSaved = await WaitForScreenshotFile(filename);
+                                    if (fileSaved)
+                                    {
+                                        successCount++;
+                                    }
+                                    else
+                                    {
+                                        LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
+                                    }
                                 }
                             }
-
-                            var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
-                            var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
-                            CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
-                            CWHelper.CWForm.Refresh();
+                            catch (Exception ex)
+                            {
+                                LogHelper.Log($"Error taking screenshot: {ex.Message}", LogType.Error);
+                            }
                         }
-                        
-                        // Brief wait for texture to load
+
+                        // Brief delay between drawables
                         await Task.Delay(25);
 
-                        // Generate filename with the specified format
-                        string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
-
-                        // Take screenshot using GDI method
-                        bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
-                        LogHelper.Log($"Screenshot sonucu: {success} for {filename}", LogType.Info);
-
-                        if (success)
-                        {
-                            // Wait for the screenshot file to be actually saved to disk
-                            bool fileSaved = await WaitForScreenshotFile(filename);
-                            if (fileSaved)
-                            {
-                                successCount++;
-                            }
-                            else
-                            {
-                                LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
-                            }
-                        }
-
-                        // Minimal delay between screenshots (GDI is fast)
-                        await Task.Delay(10);
+                        // Clean up memory for the previous drawable before moving to next one
+                        CleanupDrawableMemory(drawable);
                     }
-
-                    // Brief delay between drawables
-                    await Task.Delay(25);
-
-                    // Clean up memory for the previous drawable before moving to next one
-                    CleanupDrawableMemory(drawable);
+                    catch (Exception ex)
+                    {
+                        LogHelper.Log($"Error processing drawable: {ex.Message}", LogType.Error);
+                    }
                 }
 
                 CustomMessageBox.Show($"Successfully captured {successCount} out of {totalCount} screenshot(s).", 
