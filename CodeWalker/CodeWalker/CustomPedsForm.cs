@@ -17,6 +17,8 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using Color = SharpDX.Color;
 using System.Runtime.InteropServices;
+using System.Drawing;
+using System.Drawing.Imaging;
 
 namespace CodeWalker
 {
@@ -141,19 +143,15 @@ namespace CodeWalker
         private float autoRotateAngle = 0f;
         private const float AutoRotateSpeed = 1.0f;
 
-        private bool originalToolsPanelVisibility = false;
-        private bool originalOnlySelectedState = false;
-        private Color originalClearColour;
-        private bool isTransparentScreenshotMode = false;
-        
-        // Fields for resolution management
-        private bool isFixedResolutionMode = false;
-        private int originalWidth = 0;
-        private int originalHeight = 0;
-        private const int FIXED_SCREENSHOT_RESOLUTION = 1024;
+        /// <summary>
+        /// Alpha mask cache to store masks for each cloth (not per texture variation)
+        /// </summary>
+        private static Dictionary<string, System.Drawing.Bitmap> alphaMaskCache = new Dictionary<string, System.Drawing.Bitmap>();
 
-        // Add flag to track transparent rendering mode
-        private bool isTransparentRenderingMode = false;
+        /// <summary>
+        /// Cropping parameters cache to store the bounding box for each cloth
+        /// </summary>
+        private static Dictionary<string, System.Drawing.Rectangle> cropParametersCache = new Dictionary<string, System.Drawing.Rectangle>();
 
         public class ComponentComboItem
         {
@@ -328,20 +326,6 @@ namespace CodeWalker
             Renderer.Update(elapsed, MouseLastPoint.X, MouseLastPoint.Y);
 
             Renderer.BeginRender(context);
-
-            // Ensure transparent flags are set if DefScene/HDR were just created by BeginRender
-            if (isTransparentRenderingMode)
-            {
-                if (Renderer.shaders?.DefScene != null && !Renderer.shaders.DefScene.UseTransparentBackground)
-                {
-                    Renderer.shaders.DefScene.UseTransparentBackground = true;
-                }
-                
-                if (Renderer.shaders?.HDR != null && !Renderer.shaders.HDR.UseTransparentBackground)
-                {
-                    Renderer.shaders.HDR.UseTransparentBackground = true;
-                }
-            }
 
             Renderer.RenderSkyAndClouds();
 
@@ -1759,750 +1743,881 @@ namespace CodeWalker
             SetDefaultCameraPosition();
         }
 
-        public bool TakeScreenshot(string drawableName, string customFilename = null)
+        /// <summary>
+        /// Generates an alpha mask for a cloth by rendering in Vertex Colour 2 mode and removing blue color
+        /// </summary>
+        /// <param name="clothName">Name of the cloth to generate mask for</param>
+        /// <returns>Alpha mask bitmap, or null if failed</returns>
+        public System.Drawing.Bitmap GenerateAlphaMask(string clothName)
         {
             try
             {
-                // Store original states
-                originalToolsPanelVisibility = ToolsPanel.Visible;
-                originalOnlySelectedState = OnlySelectedCheckBox.Checked;
-                originalClearColour = Renderer.DXMan.clearcolour;
-
-                // Set fixed resolution for consistent screenshots
-                SetFixedResolution();
-
-                // Configure interface for screenshot
-                ToolsPanel.Visible = false; // Hide tools panel
-                OnlySelectedCheckBox.Checked = true; // Show only selected drawable
+                System.Diagnostics.Debug.WriteLine($"=== GenerateAlphaMask START for: {clothName} ===");
                 
-                // Enable transparent screenshot mode
-                isTransparentScreenshotMode = true;
-                
-                // Focus camera on selected drawable for optimal framing
-                FocusOnSelectedDrawable();
-                
-                // Give the camera and resolution change a moment to settle
-                System.Threading.Thread.Sleep(300);
-
-                // Create screenshot directory if it doesn't exist
-                string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
-                Directory.CreateDirectory(screenshotDir);
-
-                // Generate filename
-                string fileName;
-                if (!string.IsNullOrEmpty(customFilename))
+                // Check if mask already exists in cache
+                if (alphaMaskCache.ContainsKey(clothName))
                 {
-                    fileName = customFilename;
-                }
-                else
-                {
-                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                    fileName = $"{drawableName}_{timestamp}";
+                    System.Diagnostics.Debug.WriteLine($"Alpha mask found in cache for {clothName}");
+                    return alphaMaskCache[clothName];
                 }
                 
-                if (!fileName.EndsWith(".png"))
+                // Store current render mode
+                string originalRenderMode = RenderModeComboBox.Text;
+                System.Diagnostics.Debug.WriteLine($"Current render mode: {originalRenderMode}");
+                
+                // Switch to Vertex Colour 2 mode
+                RenderModeComboBox.Text = "Vertex colour 2";
+                System.Diagnostics.Debug.WriteLine("Switched to Vertex Colour 2 mode");
+                
+                // Brief delay to ensure render mode change takes effect
+                System.Threading.Thread.Sleep(100);
+                
+                // Capture the screen area for mask generation
+                System.Drawing.Rectangle clientBounds = this.ClientRectangle;
+                System.Drawing.Bitmap maskBitmap = new System.Drawing.Bitmap(clientBounds.Width, clientBounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                
+                using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(maskBitmap))
                 {
-                    fileName += ".png";
+                    System.Drawing.Point clientLocation = this.PointToScreen(clientBounds.Location);
+                    graphics.CopyFromScreen(clientLocation, System.Drawing.Point.Empty, clientBounds.Size);
                 }
-
-                string filePath = Path.Combine(screenshotDir, fileName);
-
-                // Attempt DirectX screenshot first, then fallback to GDI
-                bool success = false;
-                string method = "Unknown";
-
-                // Try DirectX method first
-                try
+                
+                // Crop the mask using the same parameters as regular screenshots
+                int cropTop = 0;         
+                int cropLeft = 58;       
+                int cropBottom = 26;     
+                int cropRight = 0;       
+                
+                int finalWidth = Math.Max(1, maskBitmap.Width - cropLeft - cropRight);
+                int finalHeight = Math.Max(1, maskBitmap.Height - cropTop - cropBottom);
+                
+                System.Drawing.Bitmap croppedMask = new System.Drawing.Bitmap(finalWidth, finalHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                
+                using (System.Drawing.Graphics cropGraphics = System.Drawing.Graphics.FromImage(croppedMask))
                 {
-                    success = TakeDirectXTransparentScreenshot(filePath);
-                    if (success)
-                    {
-                        method = "DirectX";
-                    }
+                    System.Drawing.Rectangle sourceRect = new System.Drawing.Rectangle(cropLeft, cropTop, finalWidth, finalHeight);
+                    System.Drawing.Rectangle destRect = new System.Drawing.Rectangle(0, 0, finalWidth, finalHeight);
+                    cropGraphics.DrawImage(maskBitmap, destRect, sourceRect, System.Drawing.GraphicsUnit.Pixel);
                 }
-                catch (Exception dxEx)
-                {
-                    LogError($"DirectX screenshot failed: {dxEx.Message}");
-                }
-
-                // Fallback to GDI method if DirectX failed
-                if (!success)
-                {
-                    // GDI method implementation would go here if needed
-                    // For now, we'll focus on the DirectX method
-                    LogError("Screenshot capture failed");
-                    return false;
-                }
-
-                // Update status with method used and camera positioning info
-                UpdateStatus($"Screenshot saved using {method} method at {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION} with auto-focus: {filePath}");
-                return true;
+                
+                // Convert blue areas to alpha mask (blue = transparent, non-blue = opaque)
+                CreateAlphaMaskFromBlue(croppedMask, System.Drawing.Color.FromArgb(51, 102, 153), 3);
+                
+                // Find the smallest bounding box with 2px padding
+                System.Drawing.Rectangle contentBounds = FindContentBounds(croppedMask, 2);
+                System.Diagnostics.Debug.WriteLine($"Content bounds with 2px padding: {contentBounds}");
+                
+                // Crop the alpha mask to the content bounds
+                System.Drawing.Bitmap finalMask = CropBitmap(croppedMask, contentBounds);
+                
+                // Store both the mask and crop parameters in cache
+                alphaMaskCache[clothName] = (System.Drawing.Bitmap)finalMask.Clone();
+                cropParametersCache[clothName] = contentBounds;
+                
+                System.Diagnostics.Debug.WriteLine($"Alpha mask cropped to {finalMask.Width}x{finalMask.Height} and cached");
+                
+                // Restore original render mode
+                RenderModeComboBox.Text = originalRenderMode;
+                System.Diagnostics.Debug.WriteLine($"Restored render mode to: {originalRenderMode}");
+                
+                System.Diagnostics.Debug.WriteLine($"=== GenerateAlphaMask END SUCCESS for: {clothName} ===");
+                
+                maskBitmap.Dispose();
+                croppedMask.Dispose(); // Dispose the intermediate image
+                return finalMask;
             }
             catch (Exception ex)
             {
-                LogError($"Screenshot error: {ex.Message}");
-                return false;
-            }
-            finally
-            {
-                // Always restore original settings
-                RestoreOriginalSettings();
+                System.Diagnostics.Debug.WriteLine($"GenerateAlphaMask exception for {clothName}: {ex.Message}");
+                return null;
             }
         }
 
-        private bool TakeDirectXTransparentScreenshot(string filePath)
+        /// <summary>
+        /// Converts blue areas in a bitmap to alpha mask data
+        /// Blue areas become transparent (alpha = 0), non-blue areas become opaque (alpha = 255)
+        /// </summary>
+        /// <param name="bitmap">The bitmap to process</param>
+        /// <param name="blueColor">The blue color to detect</param>
+        /// <param name="threshold">Color matching threshold</param>
+        private void CreateAlphaMaskFromBlue(System.Drawing.Bitmap bitmap, System.Drawing.Color blueColor, int threshold)
         {
             try
             {
-                var device = Renderer.DXMan.device;
-                var context = Renderer.DXMan.context;
-                
-                // Instead of capturing from backbuffer, capture from the render target where transparency is handled
-                Texture2D sourceTexture = null;
-                Texture2DDescription desc;
-                
-                if (Renderer.shaders?.DefScene?.SceneColour != null)
-                {
-                    // Use DefScene SceneColour render target - this has our transparent background
-                    sourceTexture = Renderer.shaders.DefScene.SceneColour.Texture;
-                    desc = sourceTexture.Description;
-                }
-                else if (Renderer.shaders?.HDR?.PrimaryTexture != null)
-                {
-                    // Fallback to HDR Primary render target
-                    sourceTexture = Renderer.shaders.HDR.PrimaryTexture.Texture;
-                    desc = sourceTexture.Description;
-                }
-                else
-                {
-                    // Last resort - use backbuffer (but this won't have transparency)
-                    sourceTexture = Renderer.DXMan.backbuffer;
-                    desc = sourceTexture.Description;
-                }
-
-                // Create staging texture for CPU access with alpha support
-                var stagingDesc = desc;
-                stagingDesc.Usage = ResourceUsage.Staging;
-                stagingDesc.BindFlags = BindFlags.None;
-                stagingDesc.CpuAccessFlags = CpuAccessFlags.Read;
-                stagingDesc.SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0);
-
-                using (var stagingTexture = new SharpDX.Direct3D11.Texture2D(device, stagingDesc))
-                {
-                    // Handle multisampled source texture
-                    if (desc.SampleDescription.Count > 1)
-                    {
-                        // Create resolved texture first
-                        var resolvedDesc = desc;
-                        resolvedDesc.SampleDescription = new SharpDX.DXGI.SampleDescription(1, 0);
-
-                        using (var resolvedTexture = new SharpDX.Direct3D11.Texture2D(device, resolvedDesc))
-                        {
-                            // Resolve multisampling
-                            context.ResolveSubresource(sourceTexture, 0, resolvedTexture, 0, desc.Format);
-                            // Copy to staging
-                            context.CopyResource(resolvedTexture, stagingTexture);
-                        }
-                    }
-                    else
-                    {
-                        // Direct copy for non-multisampled
-                        context.CopyResource(sourceTexture, stagingTexture);
-                    }
-
-                    // Map staging texture to read pixels
-                    var dataBox = context.MapSubresource(stagingTexture, 0, SharpDX.Direct3D11.MapMode.Read, SharpDX.Direct3D11.MapFlags.None);
-
-                    try
-                    {
-                        return ProcessTransparentScreenshotData(filePath, dataBox, desc.Width, desc.Height);
-                    }
-                    finally
-                    {
-                        context.UnmapSubresource(stagingTexture, 0);
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private unsafe bool ProcessTransparentScreenshotData(string filePath, SharpDX.DataBox dataBox, int width, int height)
-        {
-            try
-            {
-                using (var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-                {
-                    var bitmapData = bitmap.LockBits(
-                        new System.Drawing.Rectangle(0, 0, width, height),
-                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                        System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-
-                    try
-                    {
-                        var sourcePtr = dataBox.DataPointer;
-                        var destPtr = bitmapData.Scan0;
-
-                        // Process pixels with native transparency support
-                        ProcessTransparentPixels(sourcePtr, destPtr, width, height, dataBox.RowPitch, bitmapData.Stride);
-                    }
-                    finally
-                    {
-                        bitmap.UnlockBits(bitmapData);
-                    }
-
-                    // Auto-crop to fit clothing perfectly
-                    using (var finalBitmap = AutoCropToFitClothing(bitmap))
-                    {
-                        // Save as PNG with alpha channel
-                        finalBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
-                        return true;
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private unsafe void ProcessTransparentPixels(IntPtr sourcePtr, IntPtr destPtr, int width, int height, int sourcePitch, int destStride)
-        {
-            byte* srcBytes = (byte*)sourcePtr;
-            byte* dstBytes = (byte*)destPtr;
-
-            for (int y = 0; y < height; y++)
-            {
-                byte* srcRow = srcBytes + y * sourcePitch;
-                byte* dstRow = dstBytes + y * destStride;
-
-                for (int x = 0; x < width; x++)
-                {
-                    // DirectX SceneColour format is RGBA (R32G32B32A32_Float converted to bytes)
-                    byte r = srcRow[x * 4 + 0]; // Red
-                    byte g = srcRow[x * 4 + 1]; // Green  
-                    byte b = srcRow[x * 4 + 2]; // Blue
-                    byte a = srcRow[x * 4 + 3]; // Alpha
-
-                    // When we render with transparent background, the background areas should
-                    // already have alpha = 0, and solid objects should have alpha > 0
-                    // But DirectX doesn't always handle this perfectly, so we need to check
-                    
-                    // Check if this pixel matches the transparent clear color exactly
-                    bool isTransparentBackground = (r == 0 && g == 0 && b == 0 && a == 0);
-                    
-                    // Also check for the background color in case transparency didn't work
-                    // Original blue background: RGB(51, 102, 153) = (0.2, 0.4, 0.6) * 255
-                    bool isBackgroundColor = (Math.Abs(r - 51) <= 5 && Math.Abs(g - 102) <= 5 && Math.Abs(b - 153) <= 5) ||
-                                           (Math.Abs(r - 153) <= 5 && Math.Abs(g - 102) <= 5 && Math.Abs(b - 51) <= 5); // Handle R/B swap
-                    
-                    if (isTransparentBackground || isBackgroundColor)
-                    {
-                        // Make completely transparent
-                        dstRow[x * 4 + 0] = 0; // B
-                        dstRow[x * 4 + 1] = 0; // G
-                        dstRow[x * 4 + 2] = 0; // R
-                        dstRow[x * 4 + 3] = 0; // A
-                    }
-                    else
-                    {
-                        // System.Drawing.Bitmap expects BGRA format, so swap R and B from DirectX RGBA
-                        dstRow[x * 4 + 0] = b; // B (swapped from position 2)
-                        dstRow[x * 4 + 1] = g; // G (same position)
-                        dstRow[x * 4 + 2] = r; // R (swapped from position 0)
-                        dstRow[x * 4 + 3] = 255; // A - full opacity for clothing
-                    }
-                }
-            }
-        }
-
-        private System.Drawing.Bitmap AutoCropToFitClothing(System.Drawing.Bitmap originalBitmap)
-        {
-            try
-            {
-                // Find the bounding box of all non-transparent pixels
-                int minX = originalBitmap.Width;
-                int minY = originalBitmap.Height;
-                int maxX = -1;
-                int maxY = -1;
-
-                var bitmapData = originalBitmap.LockBits(
-                    new System.Drawing.Rectangle(0, 0, originalBitmap.Width, originalBitmap.Height),
-                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                System.Drawing.Imaging.BitmapData bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadWrite,
                     System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 
-                try
+                unsafe
                 {
-                    unsafe
+                    byte* ptr = (byte*)bitmapData.Scan0.ToPointer();
+                    int bytesPerPixel = 4;
+                    
+                    for (int y = 0; y < bitmap.Height; y++)
                     {
-                        byte* pixels = (byte*)bitmapData.Scan0;
-
-                        // Scan all pixels to find the bounding box of opaque content
-                        for (int y = 0; y < originalBitmap.Height; y++)
+                        for (int x = 0; x < bitmap.Width; x++)
                         {
-                            for (int x = 0; x < originalBitmap.Width; x++)
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            
+                            byte blue = ptr[index];
+                            byte green = ptr[index + 1];
+                            byte red = ptr[index + 2];
+                            
+                            // Check if this pixel is blue (the background color we want to mask out)
+                            if (IsColorSimilar(red, green, blue, blueColor.R, blueColor.G, blueColor.B, threshold))
                             {
-                                byte* pixel = pixels + y * bitmapData.Stride + x * 4;
-                                byte alpha = pixel[3]; // Alpha channel
-
-                                // If pixel is not transparent (alpha > threshold)
-                                if (alpha > 10) // Small threshold to handle anti-aliasing
-                                {
-                                    minX = Math.Min(minX, x);
-                                    minY = Math.Min(minY, y);
-                                    maxX = Math.Max(maxX, x);
-                                    maxY = Math.Max(maxY, y);
-                                }
+                                // Blue areas become transparent in the mask
+                                ptr[index] = 0;     // Blue = 0
+                                ptr[index + 1] = 0; // Green = 0
+                                ptr[index + 2] = 0; // Red = 0
+                                ptr[index + 3] = 0; // Alpha = 0 (transparent)
+                            }
+                            else
+                            {
+                                // Non-blue areas become opaque white in the mask
+                                ptr[index] = 255;     // Blue = 255
+                                ptr[index + 1] = 255; // Green = 255
+                                ptr[index + 2] = 255; // Red = 255
+                                ptr[index + 3] = 255; // Alpha = 255 (opaque)
                             }
                         }
                     }
                 }
-                finally
-                {
-                    originalBitmap.UnlockBits(bitmapData);
-                }
 
-                // Check if we found any content
-                if (maxX == -1 || maxY == -1)
-                {
-                    // No opaque content found, return original
-                    return new System.Drawing.Bitmap(originalBitmap);
-                }
-
-                // Calculate content dimensions
-                int contentWidth = maxX - minX + 1;
-                int contentHeight = maxY - minY + 1;
-
-                // Calculate the size of the square needed to contain the content
-                int squareSize = Math.Max(contentWidth, contentHeight);
-
-                // Add some padding (10% of the square size, minimum 20 pixels)
-                int padding = Math.Max(squareSize / 10, 20);
-                squareSize += padding * 2;
-
-                // Calculate center of the content
-                int contentCenterX = minX + contentWidth / 2;
-                int contentCenterY = minY + contentHeight / 2;
-
-                // Calculate crop position to center the content in the square
-                int cropX = contentCenterX - squareSize / 2;
-                int cropY = contentCenterY - squareSize / 2;
-
-                // Ensure crop rectangle stays within original image bounds
-                cropX = Math.Max(0, Math.Min(cropX, originalBitmap.Width - squareSize));
-                cropY = Math.Max(0, Math.Min(cropY, originalBitmap.Height - squareSize));
-
-                // Adjust square size if it extends beyond image bounds
-                squareSize = Math.Min(squareSize, Math.Min(originalBitmap.Width - cropX, originalBitmap.Height - cropY));
-
-                // Create the cropped bitmap
-                var cropRect = new System.Drawing.Rectangle(cropX, cropY, squareSize, squareSize);
-                var croppedBitmap = originalBitmap.Clone(cropRect, originalBitmap.PixelFormat);
-
-                UpdateStatus($"Auto-cropped to {squareSize}x{squareSize} square (content: {contentWidth}x{contentHeight}, padding: {padding}px)");
-                
-                return croppedBitmap;
+                bitmap.UnlockBits(bitmapData);
+                System.Diagnostics.Debug.WriteLine("Alpha mask creation completed");
             }
             catch (Exception ex)
             {
-                LogError($"Auto-crop failed: {ex.Message}");
-                // Return original bitmap if cropping fails
-                return new System.Drawing.Bitmap(originalBitmap);
+                System.Diagnostics.Debug.WriteLine($"CreateAlphaMaskFromBlue exception: {ex.Message}");
             }
         }
 
-        private unsafe void RemoveBackground(IntPtr bitmapData, int width, int height, int stride)
-        {
-            // Professional background removal for solid backgrounds AND transparent textures
-            
-            // Sample the background color from the corners (they should be background)
-            byte* pixels = (byte*)bitmapData;
-            
-            // Sample from all four corners and use the most common color
-            var corner1 = GetPixelColor(pixels, 0, 0, stride);
-            var corner2 = GetPixelColor(pixels, width - 1, 0, stride);
-            var corner3 = GetPixelColor(pixels, 0, height - 1, stride);
-            var corner4 = GetPixelColor(pixels, width - 1, height - 1, stride);
-
-            // Use corner1 as reference background color (usually the most reliable)
-            var bgColor = corner1;
-
-            // PHASE 1: Traditional edge-based flood fill for main background removal
-            bool[,] visited = new bool[width, height];
-            Queue<(int x, int y)> queue = new Queue<(int, int)>();
-
-            // Start flood fill from all edges
-            for (int x = 0; x < width; x++)
-            {
-                // Top edge
-                queue.Enqueue((x, 0));
-                // Bottom edge  
-                queue.Enqueue((x, height - 1));
-            }
-
-            for (int y = 0; y < height; y++)
-            {
-                // Left edge
-                queue.Enqueue((0, y));
-                // Right edge
-                queue.Enqueue((width - 1, y));
-            }
-
-            // Flood fill algorithm for connected background areas
-            while (queue.Count > 0)
-            {
-                var (x, y) = queue.Dequeue();
-
-                if (x < 0 || x >= width || y < 0 || y >= height || visited[x, y])
-                    continue;
-
-                var currentColor = GetPixelColor(pixels, x, y, stride);
-                
-                // Check if this pixel matches background color (with tolerance)
-                if (!ColorsMatch(currentColor, bgColor, 25)) // 25 = tolerance for anti-aliasing
-                    continue;
-
-                visited[x, y] = true;
-
-                // Make this pixel transparent
-                SetPixelTransparent(pixels, x, y, stride);
-
-                // Add neighbors to queue
-                queue.Enqueue((x + 1, y));
-                queue.Enqueue((x - 1, y));
-                queue.Enqueue((x, y + 1));
-                queue.Enqueue((x, y - 1));
-            }
-
-            // PHASE 2: Analyze cloth content for blue colors before removing background colors from interior
-            bool clothContainsBlue = AnalyzeClothForBlueContent(pixels, width, height, stride, visited, bgColor);
-
-            // PHASE 3: Handle transparent textures (fishnet, lace, mesh, etc.)
-            // Make ALL remaining background-colored pixels transparent, but be more careful if cloth contains blue
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    if (!visited[x, y]) // Only check pixels not already processed by flood fill
-                    {
-                        var currentColor = GetPixelColor(pixels, x, y, stride);
-                        
-                        // If cloth contains blue colors, use much stricter matching to avoid removing cloth
-                        int tolerance = clothContainsBlue ? 8 : 15; // Much stricter if cloth has blue
-                        
-                        // Also, if cloth contains blue, add additional checks to ensure we're not removing cloth colors
-                        if (clothContainsBlue && IsLikelyClothBlue(currentColor, bgColor))
-                        {
-                            // Skip this pixel - it's likely part of the cloth design
-                            continue;
-                        }
-                        
-                        // Use stricter tolerance for internal transparency to avoid removing clothing
-                        if (ColorsMatch(currentColor, bgColor, tolerance))
-                        {
-                            SetPixelTransparent(pixels, x, y, stride);
-                        }
-                    }
-                }
-            }
-        }
-
-        private unsafe bool AnalyzeClothForBlueContent(byte* pixels, int width, int height, int stride, bool[,] visited, (byte r, byte g, byte b) bgColor)
-        {
-            int totalClothPixels = 0;
-            int blueClothPixels = 0;
-            
-            // Sample the cloth (non-transparent, non-background pixels) to see if blue is prominent
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    if (!visited[x, y]) // Not background/transparent
-                    {
-                        var currentColor = GetPixelColor(pixels, x, y, stride);
-                        
-                        // Skip if this is clearly background color
-                        if (ColorsMatch(currentColor, bgColor, 15))
-                            continue;
-                            
-                        totalClothPixels++;
-                        
-                        // Check if this pixel has significant blue content
-                        // A pixel is considered "blue" if:
-                        // 1. Blue channel is higher than red and green channels
-                        // 2. Blue channel is above a threshold
-                        // 3. The color is not too close to the background blue
-                        if (IsBlueishClothColor(currentColor, bgColor))
-                        {
-                            blueClothPixels++;
-                        }
-                    }
-                }
-            }
-            
-            // If more than 10% of cloth pixels contain blue, consider the cloth to have blue content
-            if (totalClothPixels > 0)
-            {
-                double blueRatio = (double)blueClothPixels / totalClothPixels;
-                return blueRatio > 0.1; // 10% threshold
-            }
-            
-            return false;
-        }
-        
-        private bool IsBlueishClothColor((byte r, byte g, byte b) color, (byte r, byte g, byte b) bgColor)
-        {
-            // Check if this color has significant blue content that's different from background
-            // Don't consider it blue cloth if it's too similar to the background color
-            if (ColorsMatch(color, bgColor, 20))
-                return false;
-                
-            // Must have blue as the dominant or co-dominant color channel
-            if (color.b < color.r - 20 && color.b < color.g - 20)
-                return false;
-                
-            // Must have sufficient blue intensity
-            if (color.b < 80) // Minimum blue threshold
-                return false;
-                
-            return true;
-        }
-        
-        private bool IsLikelyClothBlue((byte r, byte g, byte b) color, (byte r, byte g, byte b) bgColor)
-        {
-            // This method determines if a blue-ish color is likely part of the cloth design
-            // rather than background bleeding through
-            
-            // If the color is very close to background, it's probably background
-            if (ColorsMatch(color, bgColor, 10))
-                return false;
-                
-            // If blue is dominant and the color is saturated enough, it's likely cloth
-            if (IsBlueishClothColor(color, bgColor))
-            {
-                // Additional check: if the color has good saturation/contrast, it's likely a deliberate color choice
-                int maxChannel = Math.Max(Math.Max(color.r, color.g), color.b);
-                int minChannel = Math.Min(Math.Min(color.r, color.g), color.b);
-                int contrast = maxChannel - minChannel;
-                
-                // If there's good contrast between channels, it's likely a deliberate color choice
-                if (contrast > 30)
-                    return true;
-            }
-            
-            return false;
-        }
-
-        private unsafe (byte r, byte g, byte b) GetPixelColor(byte* pixels, int x, int y, int stride)
-        {
-            byte* pixel = pixels + y * stride + x * 4;
-            return (pixel[0], pixel[1], pixel[2]); // RGB after our color correction
-        }
-
-        private unsafe void SetPixelTransparent(byte* pixels, int x, int y, int stride)
-        {
-            byte* pixel = pixels + y * stride + x * 4;
-            pixel[0] = 0; // R
-            pixel[1] = 0; // G
-            pixel[2] = 0; // B
-            pixel[3] = 0; // A
-        }
-
-        private bool ColorsMatch((byte r, byte g, byte b) color1, (byte r, byte g, byte b) color2, int tolerance)
-        {
-            return Math.Abs(color1.r - color2.r) <= tolerance &&
-                   Math.Abs(color1.g - color2.g) <= tolerance &&
-                   Math.Abs(color1.b - color2.b) <= tolerance;
-        }
-
-        private void RestoreOriginalSettings()
+        /// <summary>
+        /// Applies an alpha mask to a bitmap and crops both to match
+        /// Where mask is transparent, the target becomes transparent
+        /// Where mask is opaque, the target remains unchanged
+        /// </summary>
+        /// <param name="targetBitmap">The bitmap to apply the mask to</param>
+        /// <param name="alphaMask">The alpha mask to apply</param>
+        /// <param name="clothName">Cloth name to get crop parameters</param>
+        /// <returns>Cropped bitmap with alpha mask applied</returns>
+        private System.Drawing.Bitmap ApplyAlphaMaskAndCrop(System.Drawing.Bitmap targetBitmap, System.Drawing.Bitmap alphaMask, string clothName)
         {
             try
             {
-                // Restore transparent background
-                if (isTransparentScreenshotMode)
+                // Get the crop parameters for this cloth
+                System.Drawing.Rectangle cropArea = new System.Drawing.Rectangle(0, 0, targetBitmap.Width, targetBitmap.Height);
+                if (cropParametersCache.ContainsKey(clothName))
                 {
-                    SetTransparentBackground(false);
-                    isTransparentScreenshotMode = false;
-                }
-
-                // Restore tools panel visibility
-                ToolsPanel.Visible = originalToolsPanelVisibility;
-                
-                // Restore only selected state
-                OnlySelectedCheckBox.Checked = originalOnlySelectedState;
-                
-                // Restore original resolution if it was changed
-                RestoreOriginalResolution();
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Error restoring settings: {ex.Message}");
-            }
-        }
-
-        private void SetTransparentBackground(bool transparent)
-        {
-            isTransparentRenderingMode = transparent;
-            
-            if (transparent)
-            {
-                // Set the clear color to transparent
-                var transparentColor = new Color(0.0f, 0.0f, 0.0f, 0.0f);
-                Renderer.DXMan.SetClearColour(transparentColor);
-                
-                // Enable transparent background in existing rendering pipeline components
-                if (Renderer.shaders?.DefScene != null)
-                {
-                    Renderer.shaders.DefScene.UseTransparentBackground = true;
-                }
-                
-                if (Renderer.shaders?.HDR != null)
-                {
-                    Renderer.shaders.HDR.UseTransparentBackground = true;
-                }
-                
-                // Note: If DefScene or HDR are null, they will be created later by ShaderManager.BeginFrame()
-                // and we'll need to set their transparent flags at that time
-            }
-            else
-            {
-                // Restore original clear color
-                Renderer.DXMan.SetClearColour(originalClearColour);
-                
-                // Disable transparent background in rendering pipeline components
-                if (Renderer.shaders?.DefScene != null)
-                {
-                    Renderer.shaders.DefScene.UseTransparentBackground = false;
-                }
-                
-                if (Renderer.shaders?.HDR != null)
-                {
-                    Renderer.shaders.HDR.UseTransparentBackground = false;
-                }
-            }
-        }
-        
-
-
-        public void FocusOnSelectedDrawable()
-        {
-            try
-            {
-                // Set fixed resolution for consistent camera positioning
-                SetFixedResolution();
-                
-                // First try to get from loaded drawables (from clothing tool)
-                Drawable targetDrawable = null;
-                Vector3 boundingCenter = Vector3.Zero;
-                float boundingSphereRadius = 1.0f;
-
-                if (LoadedDrawables.Count > 0)
-                {
-                    // Use the first loaded drawable (most recently selected from cloth tool)
-                    targetDrawable = LoadedDrawables.Values.FirstOrDefault();
-                }
-                else if (Renderer.SelectedDrawable != null)
-                {
-                    // Fallback to renderer's selected drawable
-                    targetDrawable = Renderer.SelectedDrawable as Drawable;
-                }
-                
-                if (targetDrawable != null)
-                {
-                    boundingCenter = targetDrawable.BoundingCenter;
-                    boundingSphereRadius = targetDrawable.BoundingSphereRadius;
+                    cropArea = cropParametersCache[clothName];
+                    System.Diagnostics.Debug.WriteLine($"Using cached crop parameters for {clothName}: {cropArea}");
                 }
                 else
                 {
-                    // If no specific drawable, focus on the overall ped with some default positioning
-                    boundingCenter = Vector3.Zero;
-                    boundingSphereRadius = 2.0f;
-                    UpdateStatus("No specific drawable selected, focusing on default position");
-                    MoveCameraToView(boundingCenter, boundingSphereRadius);
+                    System.Diagnostics.Debug.WriteLine($"No crop parameters found for {clothName}, using full image");
+                }
+                
+                // First crop the target bitmap to match the alpha mask
+                System.Drawing.Bitmap croppedTarget = CropBitmap(targetBitmap, cropArea);
+                
+                // Ensure both bitmaps are the same size after cropping
+                if (croppedTarget.Width != alphaMask.Width || croppedTarget.Height != alphaMask.Height)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Size mismatch after cropping: target={croppedTarget.Width}x{croppedTarget.Height}, mask={alphaMask.Width}x{alphaMask.Height}");
+                    // Try to resize to match if there's a small difference
+                    if (Math.Abs(croppedTarget.Width - alphaMask.Width) <= 1 && Math.Abs(croppedTarget.Height - alphaMask.Height) <= 1)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Small size difference, creating new bitmap with mask dimensions");
+                        System.Drawing.Bitmap resizedTarget = new System.Drawing.Bitmap(alphaMask.Width, alphaMask.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                        using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(resizedTarget))
+                        {
+                            g.DrawImage(croppedTarget, 0, 0, alphaMask.Width, alphaMask.Height);
+                        }
+                        croppedTarget.Dispose();
+                        croppedTarget = resizedTarget;
+                    }
+                    else
+                    {
+                        return croppedTarget; // Return without applying mask if sizes don't match
+                    }
+                }
+                
+                // Apply the alpha mask
+                System.Drawing.Imaging.BitmapData targetData = croppedTarget.LockBits(
+                    new System.Drawing.Rectangle(0, 0, croppedTarget.Width, croppedTarget.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadWrite,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                     
-                    // Restore resolution after a short delay
-                    Task.Delay(1000).ContinueWith(_ => RestoreOriginalResolution());
-                    return;
+                System.Drawing.Imaging.BitmapData maskData = alphaMask.LockBits(
+                    new System.Drawing.Rectangle(0, 0, alphaMask.Width, alphaMask.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    byte* targetPtr = (byte*)targetData.Scan0.ToPointer();
+                    byte* maskPtr = (byte*)maskData.Scan0.ToPointer();
+                    int bytesPerPixel = 4;
+                    
+                    for (int y = 0; y < croppedTarget.Height; y++)
+                    {
+                        for (int x = 0; x < croppedTarget.Width; x++)
+                        {
+                            int index = (y * targetData.Stride) + (x * bytesPerPixel);
+                            int maskIndex = (y * maskData.Stride) + (x * bytesPerPixel);
+                            
+                            byte maskAlpha = maskPtr[maskIndex + 3];
+                            
+                            // If mask is transparent (alpha = 0), make target transparent
+                            // If mask is opaque (alpha = 255), keep target as is
+                            targetPtr[index + 3] = maskAlpha;
+                        }
+                    }
                 }
 
-                // Adjust for different clothing types - some clothing items are positioned differently
-                Vector3 adjustedCenter = boundingCenter;
+                croppedTarget.UnlockBits(targetData);
+                alphaMask.UnlockBits(maskData);
                 
-                // Apply a small vertical offset to center clothing items better
-                adjustedCenter.Z += boundingSphereRadius * 0.1f;
-
-                // Ensure minimum radius for very small items
-                float adjustedRadius = Math.Max(boundingSphereRadius, 0.5f);
-
-                // Move camera to optimal viewing position
-                MoveCameraToView(adjustedCenter, adjustedRadius);
-
-                // Update status
-                UpdateStatus($"Camera focused on clothing item: {targetDrawable?.Name ?? "Unknown"} at {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION} (Center: {adjustedCenter:F2}, Radius: {adjustedRadius:F2})");
-                
-                // Restore resolution after a short delay to allow viewing
-                Task.Delay(1000).ContinueWith(_ => RestoreOriginalResolution());
+                System.Diagnostics.Debug.WriteLine($"Alpha mask applied and cropped to {croppedTarget.Width}x{croppedTarget.Height}");
+                return croppedTarget;
             }
             catch (Exception ex)
             {
-                LogError($"Error focusing camera on drawable: {ex.Message}");
-                // Fallback to default camera position
-                SetDefaultCameraPosition();
-                // Restore resolution in case of error
-                RestoreOriginalResolution();
+                System.Diagnostics.Debug.WriteLine($"ApplyAlphaMaskAndCrop exception: {ex.Message}");
+                return (System.Drawing.Bitmap)targetBitmap.Clone();
             }
         }
 
-        private void SetFixedResolution()
+        /// <summary>
+        /// Enhanced screenshot method with alpha mask support
+        /// For each cloth, generates alpha mask once in Vertex Colour 2 mode, then applies it to all texture variations
+        /// </summary>
+        /// <param name="filePath">Path to save the screenshot</param>
+        /// <param name="clothName">Name of the cloth (used for alpha mask caching)</param>
+        /// <param name="useAlphaMask">Whether to use alpha mask (true) or direct blue removal (false)</param>
+        /// <returns>True if successful</returns>
+        public bool TakeGDIScreenshotWithAlphaMask(string filePath, string clothName = null, bool useAlphaMask = true)
         {
             try
             {
-                if (isFixedResolutionMode) return; // Already in fixed mode
-
-                // Store original resolution
-                originalWidth = ClientSize.Width;
-                originalHeight = ClientSize.Height;
-                isFixedResolutionMode = true;
-
-                // Set form to fixed resolution
-                Size = new System.Drawing.Size(FIXED_SCREENSHOT_RESOLUTION + (Width - ClientSize.Width), 
-                                             FIXED_SCREENSHOT_RESOLUTION + (Height - ClientSize.Height));
+                System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshotWithAlphaMask START ===");
+                System.Diagnostics.Debug.WriteLine($"FilePath: {filePath}");
+                System.Diagnostics.Debug.WriteLine($"ClothName: {clothName}");
+                System.Diagnostics.Debug.WriteLine($"UseAlphaMask: {useAlphaMask}");
                 
-                // Force render buffers to resize
-                Renderer.BuffersResized(FIXED_SCREENSHOT_RESOLUTION, FIXED_SCREENSHOT_RESOLUTION);
+                // Check if this is the first texture (index 0) which should only generate alpha mask, not save screenshot
+                bool isFirstTexture = !string.IsNullOrEmpty(filePath) && filePath.EndsWith("_0.png");
+                if (isFirstTexture && useAlphaMask && !string.IsNullOrEmpty(clothName))
+                {
+                    System.Diagnostics.Debug.WriteLine("First texture detected - generating alpha mask only, not saving screenshot");
+                    System.Drawing.Bitmap firstTextureMask = GenerateAlphaMask(clothName);
+                    if (firstTextureMask != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Alpha mask generated successfully for first texture");
+                        firstTextureMask.Dispose(); // We don't need to keep this reference, it's cached internally
+                        return true; // Return success but don't save a file
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("Failed to generate alpha mask for first texture");
+                        return false;
+                    }
+                }
                 
-                UpdateStatus($"Set fixed resolution: {FIXED_SCREENSHOT_RESOLUTION}x{FIXED_SCREENSHOT_RESOLUTION}");
+                // For non-first textures, get existing alpha mask from cache
+                System.Drawing.Bitmap alphaMask = null;
+                if (useAlphaMask && !string.IsNullOrEmpty(clothName))
+                {
+                    if (alphaMaskCache.ContainsKey(clothName))
+                    {
+                        alphaMask = alphaMaskCache[clothName];
+                        System.Diagnostics.Debug.WriteLine("Using cached alpha mask for texture variation");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("No alpha mask found in cache, generating new one");
+                        alphaMask = GenerateAlphaMask(clothName);
+                        if (alphaMask == null)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Failed to generate alpha mask, falling back to direct blue removal");
+                            useAlphaMask = false;
+                        }
+                    }
+                }
+                
+                // Continue with regular screenshot capture...
+                System.Drawing.Rectangle clientBounds = this.ClientRectangle;
+                System.Drawing.Bitmap fullBitmap = new System.Drawing.Bitmap(clientBounds.Width, clientBounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                
+                using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(fullBitmap))
+                {
+                    System.Drawing.Point clientLocation = this.PointToScreen(clientBounds.Location);
+                    graphics.CopyFromScreen(clientLocation, System.Drawing.Point.Empty, clientBounds.Size);
+                }
+                
+                // Apply cropping
+                int cropTop = 0;         
+                int cropLeft = 58;       
+                int cropBottom = 26;     
+                int cropRight = 0;       
+                
+                int finalWidth = Math.Max(1, fullBitmap.Width - cropLeft - cropRight);
+                int finalHeight = Math.Max(1, fullBitmap.Height - cropTop - cropBottom);
+                
+                using (System.Drawing.Bitmap processedBitmap = new System.Drawing.Bitmap(finalWidth, finalHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    using (System.Drawing.Graphics cropGraphics = System.Drawing.Graphics.FromImage(processedBitmap))
+                    {
+                        System.Drawing.Rectangle sourceRect = new System.Drawing.Rectangle(cropLeft, cropTop, finalWidth, finalHeight);
+                        System.Drawing.Rectangle destRect = new System.Drawing.Rectangle(0, 0, finalWidth, finalHeight);
+                        cropGraphics.DrawImage(fullBitmap, destRect, sourceRect, System.Drawing.GraphicsUnit.Pixel);
+                    }
+                    
+                    // Apply transparency processing
+                    System.Drawing.Bitmap finalBitmap;
+                    if (useAlphaMask && alphaMask != null)
+                    {
+                        // Use alpha mask approach with auto-cropping
+                        System.Diagnostics.Debug.WriteLine("Applying alpha mask with auto-cropping");
+                        finalBitmap = ApplyAlphaMaskAndCrop(processedBitmap, alphaMask, clothName);
+                        
+                        // Remove any remaining blue pixels if they're minority (<30%)
+                        System.Diagnostics.Debug.WriteLine("Cleaning up remaining blue pixels");
+                        int bluePixelsRemoved = RemoveBluePixelsIfMinority(finalBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
+                        if (bluePixelsRemoved == -1)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Blue pixel removal skipped - likely blue clothing");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Removed {bluePixelsRemoved} remaining blue pixels");
+                        }
+                    }
+                    else
+                    {
+                        // Use direct blue removal approach
+                        System.Diagnostics.Debug.WriteLine("Using direct blue removal");
+                        RemoveColorAndMakeTransparent(processedBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
+                        finalBitmap = processedBitmap;
+                    }
+                    
+                    // Save the final image
+                    string directory = Path.GetDirectoryName(filePath);
+                    if (!Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    
+                    finalBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                    System.Diagnostics.Debug.WriteLine($"Saved final image: {filePath}");
+                    
+                    // Clean up
+                    if (finalBitmap != processedBitmap)
+                    {
+                        finalBitmap.Dispose();
+                    }
+                    
+                    bool success = File.Exists(filePath) && new FileInfo(filePath).Length > 0;
+                    System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshotWithAlphaMask END: {success} ===");
+                    
+                    fullBitmap.Dispose();
+                    return success;
+                }
             }
             catch (Exception ex)
             {
-                LogError($"Error setting fixed resolution: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"TakeGDIScreenshotWithAlphaMask exception: {ex.Message}");
+                return false;
             }
         }
 
-        private void RestoreOriginalResolution()
+        public bool TakeGDIScreenshot(string filePath)
         {
+            // FORCE WRITE A DEBUG FILE TO CONFIRM THIS METHOD IS CALLED
             try
             {
-                if (!isFixedResolutionMode) return; // Not in fixed mode
+                string debugPath = Path.Combine(Path.GetDirectoryName(filePath), "METHOD_CALLED_DEBUG.txt");
+                File.WriteAllText(debugPath, $"TakeGDIScreenshot called at {DateTime.Now} for {filePath}");
+            }
+            catch { }
+            
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshot START for: {filePath} ===");
+                
+                // Ensure the form is visible and active
+                if (this.WindowState == FormWindowState.Minimized)
+                {
+                    this.WindowState = FormWindowState.Normal;
+                    System.Diagnostics.Debug.WriteLine("Form was minimized, restored to normal");
+                }
+                
+                this.Activate();
+                System.Threading.Thread.Sleep(100); // Increased delay for better stability
+                System.Diagnostics.Debug.WriteLine("Form activated and delay completed");
+                
+                // Get the client area bounds (exclude title bar, borders, tools panel)
+                System.Drawing.Rectangle clientBounds = this.ClientRectangle;
+                System.Diagnostics.Debug.WriteLine($"Original client bounds: {clientBounds}");
+                
+                // Adjust bounds to exclude the tools panel if visible
+                if (ToolsPanel != null && ToolsPanel.Visible)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Tools panel is visible, width: {ToolsPanel.Width}");
+                    clientBounds.Width -= ToolsPanel.Width;
+                }
+                
+                // Adjust bounds to exclude console panel if visible  
+                if (ConsolePanel != null && ConsolePanel.Visible)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Console panel is visible, height: {ConsolePanel.Height}");
+                    clientBounds.Height -= ConsolePanel.Height;
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"Adjusted client bounds: {clientBounds}");
+                
+                if (clientBounds.Width <= 0 || clientBounds.Height <= 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("ERROR: Invalid client bounds after adjustment");
+                    return false;
+                }
+                
+                // Create bitmap for the full screenshot first
+                using (System.Drawing.Bitmap fullBitmap = new System.Drawing.Bitmap(clientBounds.Width, clientBounds.Height))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Created full bitmap: {fullBitmap.Width}x{fullBitmap.Height}");
+                    
+                    using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(fullBitmap))
+                    {
+                        // Capture the client area content
+                        System.Drawing.Point clientLocation = this.PointToScreen(clientBounds.Location);
+                        System.Diagnostics.Debug.WriteLine($"Screen capture location: {clientLocation}");
+                        graphics.CopyFromScreen(clientLocation, System.Drawing.Point.Empty, clientBounds.Size);
+                        System.Diagnostics.Debug.WriteLine("Screen capture completed");
+                    }
+                    
 
-                // Restore original size
-                Size = new System.Drawing.Size(originalWidth + (Width - ClientSize.Width), 
-                                             originalHeight + (Height - ClientSize.Height));
+                    
+                                         // Define crop parameters to remove unwanted areas - USER CALCULATED VALUES
+                     int cropTop = 0;         // No top cropping needed
+                     int cropLeft = 58;       // Remove left edge - user calculated
+                     int cropBottom = 26;     // Remove bottom status bar - user calculated  
+                     int cropRight = 0;       // No right cropping needed
+                    
+                    System.Diagnostics.Debug.WriteLine($"CONSERVATIVE Crop parameters - Top: {cropTop}, Left: {cropLeft}, Bottom: {cropBottom}, Right: {cropRight}");
+                    
+                    // Calculate the final cropped dimensions (what will remain after cropping)
+                    int finalWidth = Math.Max(1, fullBitmap.Width - cropLeft - cropRight);
+                    int finalHeight = Math.Max(1, fullBitmap.Height - cropTop - cropBottom);
+                    
+                    System.Diagnostics.Debug.WriteLine($"Full bitmap: {fullBitmap.Width}x{fullBitmap.Height}");
+                    System.Diagnostics.Debug.WriteLine($"Final dimensions after cropping: {finalWidth}x{finalHeight}");
+                    
+                    if (finalWidth <= 0 || finalHeight <= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine("ERROR: Invalid final dimensions");
+                        return false;
+                    }
+                    
+                    // Create the final cropped and processed bitmap
+                    using (System.Drawing.Bitmap processedBitmap = new System.Drawing.Bitmap(finalWidth, finalHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Created processed bitmap: {processedBitmap.Width}x{processedBitmap.Height}");
+                        
+                        using (System.Drawing.Graphics cropGraphics = System.Drawing.Graphics.FromImage(processedBitmap))
+                        {
+                            // Define the source rectangle (the area we want to copy from the original)
+                            // Start at (cropLeft, cropTop) and take (finalWidth, finalHeight) pixels
+                            System.Drawing.Rectangle sourceRect = new System.Drawing.Rectangle(
+                                cropLeft,           // Start X position 
+                                cropTop,            // Start Y position 
+                                finalWidth,         // Width of the area to copy (already calculated correctly)
+                                finalHeight         // Height of the area to copy (already calculated correctly)
+                            );
+                            
+                            // Validate source rectangle bounds
+                            if (sourceRect.X < 0 || sourceRect.Y < 0 || 
+                                sourceRect.Right > fullBitmap.Width || sourceRect.Bottom > fullBitmap.Height)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"ERROR: Source rectangle {sourceRect} exceeds bitmap bounds {fullBitmap.Width}x{fullBitmap.Height}");
+                                System.Diagnostics.Debug.WriteLine($"sourceRect.Right = {sourceRect.Right}, sourceRect.Bottom = {sourceRect.Bottom}");
+                                return false;
+                            }
+                            
+                            System.Diagnostics.Debug.WriteLine($"Source rectangle: {sourceRect} (from {sourceRect.X},{sourceRect.Y} to {sourceRect.Right},{sourceRect.Bottom})");
+                            
+                            // Define the destination rectangle (full size of the new bitmap)
+                            System.Drawing.Rectangle destRect = new System.Drawing.Rectangle(0, 0, finalWidth, finalHeight);
+                            System.Diagnostics.Debug.WriteLine($"Destination rectangle: {destRect}");
+                            
+                            // Copy the cropped region
+                            cropGraphics.DrawImage(fullBitmap, destRect, sourceRect, System.Drawing.GraphicsUnit.Pixel);
+                            System.Diagnostics.Debug.WriteLine("Image cropping completed");
+                        }
+                        
+
+                        
+                        // Process the image to remove specific color and make it transparent
+                        int pixelsProcessed = RemoveColorAndMakeTransparent(processedBitmap, System.Drawing.Color.FromArgb(51, 102, 153), 3);
+                        System.Diagnostics.Debug.WriteLine($"Color processing completed, {pixelsProcessed} pixels made transparent");
+                        
+                        // Ensure directory exists
+                        string directory = Path.GetDirectoryName(filePath);
+                        if (!Directory.Exists(directory))
+                        {
+                            Directory.CreateDirectory(directory);
+                            System.Diagnostics.Debug.WriteLine($"Created directory: {directory}");
+                        }
+                        
+                        // Save the processed screenshot with transparency
+                        processedBitmap.Save(filePath, System.Drawing.Imaging.ImageFormat.Png);
+                        System.Diagnostics.Debug.WriteLine($"Saved final processed image: {filePath}");
+                        
+                        // Verify file was created and has content
+                        if (File.Exists(filePath))
+                        {
+                            FileInfo fileInfo = new FileInfo(filePath);
+                            System.Diagnostics.Debug.WriteLine($"File verification: exists={File.Exists(filePath)}, size={fileInfo.Length} bytes");
+                            return fileInfo.Length > 0;
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine("ERROR: Final file was not created");
+                        }
+                    }
+                }
                 
-                // Force render buffers to resize back to original
-                Renderer.BuffersResized(originalWidth, originalHeight);
-                
-                isFixedResolutionMode = false;
-                UpdateStatus("Restored original resolution");
+                System.Diagnostics.Debug.WriteLine("=== TakeGDIScreenshot END (failed) ===");
+                return false;
             }
             catch (Exception ex)
             {
-                LogError($"Error restoring resolution: {ex.Message}");
+                // Log the exception for debugging
+                System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshot EXCEPTION ===");
+                System.Diagnostics.Debug.WriteLine($"Exception: {ex.GetType().Name}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Removes a specific color from the bitmap and makes it transparent
+        /// </summary>
+        /// <param name="bitmap">The bitmap to process</param>
+        /// <param name="colorToRemove">The color to remove (RGB)</param>
+        /// <param name="threshold">The tolerance threshold for color matching</param>
+        /// <returns>Number of pixels that were made transparent</returns>
+        private int RemoveColorAndMakeTransparent(System.Drawing.Bitmap bitmap, System.Drawing.Color colorToRemove, int threshold)
+        {
+            int pixelsProcessed = 0;
+            
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Color removal - Target: RGB({colorToRemove.R},{colorToRemove.G},{colorToRemove.B}), Threshold: {threshold}");
+                
+                // Lock the bitmap's bits for direct pixel manipulation
+                System.Drawing.Imaging.BitmapData bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadWrite,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    byte* ptr = (byte*)bitmapData.Scan0.ToPointer();
+                    int bytesPerPixel = 4; // ARGB = 4 bytes per pixel
+                    
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            
+                            byte blue = ptr[index];
+                            byte green = ptr[index + 1];
+                            byte red = ptr[index + 2];
+                            byte alpha = ptr[index + 3];
+                            
+                            // Check if the current pixel color is close to the target color
+                            if (IsColorSimilar(red, green, blue, colorToRemove.R, colorToRemove.G, colorToRemove.B, threshold))
+                            {
+                                // Make this pixel transparent
+                                ptr[index + 3] = 0; // Set alpha to 0 (fully transparent)
+                                pixelsProcessed++;
+                            }
+                        }
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+                System.Diagnostics.Debug.WriteLine($"Color removal completed: {pixelsProcessed} pixels processed");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Color removal exception: {ex.Message}");
+            }
+            
+            return pixelsProcessed;
+        }
+
+        /// <summary>
+        /// Checks if two colors are similar within a given threshold
+        /// </summary>
+        /// <param name="r1">Red component of first color</param>
+        /// <param name="g1">Green component of first color</param>
+        /// <param name="b1">Blue component of first color</param>
+        /// <param name="r2">Red component of second color</param>
+        /// <param name="g2">Green component of second color</param>
+        /// <param name="b2">Blue component of second color</param>
+        /// <param name="threshold">Maximum allowed difference per channel</param>
+        /// <returns>True if colors are similar within the threshold</returns>
+        private bool IsColorSimilar(byte r1, byte g1, byte b1, byte r2, byte g2, byte b2, int threshold)
+        {
+            return Math.Abs(r1 - r2) <= threshold &&
+                   Math.Abs(g1 - g2) <= threshold &&
+                   Math.Abs(b1 - b2) <= threshold;
+        }
+
+        /// <summary>
+        /// Finds the smallest bounding rectangle that contains all non-transparent pixels
+        /// </summary>
+        /// <param name="bitmap">The bitmap to analyze</param>
+        /// <param name="padding">Padding to add around the bounding box</param>
+        /// <returns>Rectangle representing the bounding box with padding</returns>
+        private System.Drawing.Rectangle FindContentBounds(System.Drawing.Bitmap bitmap, int padding = 2)
+        {
+            int minX = bitmap.Width;
+            int minY = bitmap.Height;
+            int maxX = -1;
+            int maxY = -1;
+
+            try
+            {
+                System.Drawing.Imaging.BitmapData bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    byte* ptr = (byte*)bitmapData.Scan0.ToPointer();
+                    int bytesPerPixel = 4;
+                    
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            byte alpha = ptr[index + 3];
+                            
+                            // If pixel is not transparent (alpha > 0)
+                            if (alpha > 0)
+                            {
+                                if (x < minX) minX = x;
+                                if (x > maxX) maxX = x;
+                                if (y < minY) minY = y;
+                                if (y > maxY) maxY = y;
+                            }
+                        }
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+
+                // If no content found, return full image bounds
+                if (maxX == -1 || maxY == -1)
+                {
+                    System.Diagnostics.Debug.WriteLine("No content found in image, using full bounds");
+                    return new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+                }
+
+                // Add padding and ensure bounds are within image
+                minX = Math.Max(0, minX - padding);
+                minY = Math.Max(0, minY - padding);
+                maxX = Math.Min(bitmap.Width - 1, maxX + padding);
+                maxY = Math.Min(bitmap.Height - 1, maxY + padding);
+
+                int width = maxX - minX + 1;
+                int height = maxY - minY + 1;
+
+                // Make it SQUARE by using the larger dimension
+                int squareSize = Math.Max(width, height);
+                
+                // Center the square within the content bounds
+                int centerX = minX + width / 2;
+                int centerY = minY + height / 2;
+                
+                int squareMinX = centerX - squareSize / 2;
+                int squareMinY = centerY - squareSize / 2;
+                
+                // Ensure the square fits within the image bounds
+                squareMinX = Math.Max(0, Math.Min(squareMinX, bitmap.Width - squareSize));
+                squareMinY = Math.Max(0, Math.Min(squareMinY, bitmap.Height - squareSize));
+                
+                // If the square is too big for the image, resize it
+                if (squareMinX + squareSize > bitmap.Width)
+                {
+                    squareSize = bitmap.Width - squareMinX;
+                }
+                if (squareMinY + squareSize > bitmap.Height)
+                {
+                    squareSize = bitmap.Height - squareMinY;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Content bounds found: ({minX},{minY}) to ({maxX},{maxY}), size: {width}x{height}");
+                System.Diagnostics.Debug.WriteLine($"Square crop area: ({squareMinX},{squareMinY}), size: {squareSize}x{squareSize}");
+                
+                return new System.Drawing.Rectangle(squareMinX, squareMinY, squareSize, squareSize);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"FindContentBounds exception: {ex.Message}");
+                return new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+            }
+        }
+
+        /// <summary>
+        /// Crops a bitmap to the specified rectangle
+        /// </summary>
+        /// <param name="source">Source bitmap to crop</param>
+        /// <param name="cropArea">Rectangle defining the crop area</param>
+        /// <returns>Cropped bitmap</returns>
+        private System.Drawing.Bitmap CropBitmap(System.Drawing.Bitmap source, System.Drawing.Rectangle cropArea)
+        {
+            try
+            {
+                // Ensure crop area is within source bounds
+                cropArea = System.Drawing.Rectangle.Intersect(cropArea, new System.Drawing.Rectangle(0, 0, source.Width, source.Height));
+                
+                if (cropArea.Width <= 0 || cropArea.Height <= 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("Invalid crop area, returning clone of original");
+                    return (System.Drawing.Bitmap)source.Clone();
+                }
+
+                System.Drawing.Bitmap cropped = new System.Drawing.Bitmap(cropArea.Width, cropArea.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                
+                using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(cropped))
+                {
+                    graphics.DrawImage(source, new System.Drawing.Rectangle(0, 0, cropArea.Width, cropArea.Height), cropArea, System.Drawing.GraphicsUnit.Pixel);
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"Bitmap cropped from {source.Width}x{source.Height} to {cropped.Width}x{cropped.Height}");
+                return cropped;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"CropBitmap exception: {ex.Message}");
+                return (System.Drawing.Bitmap)source.Clone();
+            }
+        }
+
+        /// <summary>
+        /// Removes blue pixels from the image only if they represent less than 30% of the total pixels
+        /// This prevents removing actual blue clothing while cleaning up remaining background artifacts
+        /// </summary>
+        /// <param name="bitmap">The bitmap to process</param>
+        /// <param name="blueColor">The blue color to remove</param>
+        /// <param name="threshold">Color matching threshold</param>
+        /// <returns>Number of pixels processed, or -1 if skipped due to >30% blue</returns>
+        private int RemoveBluePixelsIfMinority(System.Drawing.Bitmap bitmap, System.Drawing.Color blueColor, int threshold)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"Checking blue pixel percentage before removal...");
+                
+                int totalPixels = bitmap.Width * bitmap.Height;
+                int bluePixelCount = 0;
+                int pixelsProcessed = 0;
+                
+                System.Drawing.Imaging.BitmapData bitmapData = bitmap.LockBits(
+                    new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadWrite,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                unsafe
+                {
+                    byte* ptr = (byte*)bitmapData.Scan0.ToPointer();
+                    int bytesPerPixel = 4;
+                    
+                    // First pass: count blue pixels
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            
+                            byte blue = ptr[index];
+                            byte green = ptr[index + 1];
+                            byte red = ptr[index + 2];
+                            byte alpha = ptr[index + 3];
+                            
+                            // Only count non-transparent pixels
+                            if (alpha > 0 && IsColorSimilar(red, green, blue, blueColor.R, blueColor.G, blueColor.B, threshold))
+                            {
+                                bluePixelCount++;
+                            }
+                        }
+                    }
+                    
+                    // Calculate percentage of blue pixels (only counting non-transparent pixels)
+                    int nonTransparentPixels = 0;
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            byte alpha = ptr[index + 3];
+                            if (alpha > 0) nonTransparentPixels++;
+                        }
+                    }
+                    
+                    double bluePercentage = nonTransparentPixels > 0 ? (double)bluePixelCount / nonTransparentPixels * 100.0 : 0.0;
+                    System.Diagnostics.Debug.WriteLine($"Blue pixels: {bluePixelCount}/{nonTransparentPixels} ({bluePercentage:F1}%)");
+                    
+                    // Only remove blue pixels if they represent less than 30% of non-transparent pixels
+                    if (bluePercentage >= 30.0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Blue pixels >= 30%, skipping removal (likely blue clothing)");
+                        bitmap.UnlockBits(bitmapData);
+                        return -1; // Return -1 to indicate skipped
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"Blue pixels < 30%, proceeding with removal");
+                    
+                    // Second pass: remove blue pixels
+                    for (int y = 0; y < bitmap.Height; y++)
+                    {
+                        for (int x = 0; x < bitmap.Width; x++)
+                        {
+                            int index = (y * bitmapData.Stride) + (x * bytesPerPixel);
+                            
+                            byte blue = ptr[index];
+                            byte green = ptr[index + 1];
+                            byte red = ptr[index + 2];
+                            byte alpha = ptr[index + 3];
+                            
+                            // Remove blue pixels (make them transparent)
+                            if (alpha > 0 && IsColorSimilar(red, green, blue, blueColor.R, blueColor.G, blueColor.B, threshold))
+                            {
+                                ptr[index + 3] = 0; // Set alpha to 0 (transparent)
+                                pixelsProcessed++;
+                            }
+                        }
+                    }
+                }
+
+                bitmap.UnlockBits(bitmapData);
+                System.Diagnostics.Debug.WriteLine($"Blue pixel cleanup completed: {pixelsProcessed} pixels made transparent");
+                return pixelsProcessed;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"RemoveBluePixelsIfMinority exception: {ex.Message}");
+                return 0;
             }
         }
     }
 }
+

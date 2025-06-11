@@ -747,6 +747,9 @@ namespace grzyClothTool.Controls
 
             try
             {
+                // Optimize CodeWalker UI for batch screenshots
+                CWHelper.OptimizeCodeWalkerForScreenshots();
+                
                 int successCount = 0;
                 int totalCount = 0;
 
@@ -774,8 +777,8 @@ namespace grzyClothTool.Controls
                     // Send drawable update to preview (same as when user clicks on drawable)
                     CWHelper.SendDrawableUpdateToPreview(drawableSelectionArgs);
                     
-                    // Wait for the drawable to load in preview
-                    await Task.Delay(600);
+                    // Brief wait for drawable to load (GDI is much faster)
+                    await Task.Delay(50);
 
                     string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
                     string gameIdString = drawable.DisplayNumberWithOffset;
@@ -798,20 +801,36 @@ namespace grzyClothTool.Controls
                         // Send texture update to preview (same mechanism as SelectedDrawable_TextureChanged)
                         if (MainWindow.AddonManager.IsPreviewEnabled)
                         {
+                            // Check if the drawable exists in LoadedDrawables before accessing it
+                            if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
+                            {
+                                // If drawable is not loaded, load it first
+                                var ydd = CWHelper.CreateYddFile(drawable);
+                                if (ydd != null && ydd.Drawables.Length > 0)
+                                {
+                                    CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
+                                }
+                                else
+                                {
+                                    continue; // Skip this texture if drawable can't be loaded
+                                }
+                            }
+
                             var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
                             var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
                             CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
                             CWHelper.CWForm.Refresh();
                         }
                         
-                        // Wait for texture to load and preview to update
-                        await Task.Delay(400);
+                        // Brief wait for texture to load
+                        await Task.Delay(25);
 
                         // Generate filename with the specified format
                         string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
 
-                        // Take screenshot using regular method for now - the setup/restore issue needs CodeWalker modification
+                        // Take screenshot using GDI method
                         bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
+                        LogHelper.Log($"Screenshot sonucu: {success} for {filename}", LogType.Info);
 
                         if (success)
                         {
@@ -827,12 +846,12 @@ namespace grzyClothTool.Controls
                             }
                         }
 
-                        // Small delay between screenshots
-                        await Task.Delay(100);
+                        // Minimal delay between screenshots (GDI is fast)
+                        await Task.Delay(10);
                     }
 
-                    // Additional delay between drawables to ensure proper loading
-                    await Task.Delay(300);
+                    // Brief delay between drawables
+                    await Task.Delay(25);
 
                     // Clean up memory for the previous drawable before moving to next one
                     CleanupDrawableMemory(drawable);
@@ -875,80 +894,7 @@ namespace grzyClothTool.Controls
             return false;
         }
 
-        private class CodeWalkerOriginalSettings
-        {
-            public bool OriginalToolsPanelVisibility;
-            public bool OriginalOnlySelectedState;
-            public System.Drawing.Color OriginalClearColour;
-            public bool OriginalTransparentMode;
-        }
 
-        private CodeWalkerOriginalSettings SetupCodeWalkerForBatch()
-        {
-            var settings = new CodeWalkerOriginalSettings();
-            
-            try
-            {
-                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
-                {
-                    return settings;
-                }
-
-                var cwFormType = CWHelper.CWForm.GetType();
-
-                // Store original states
-                var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (toolsPanelField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.Control toolsPanel)
-                {
-                    settings.OriginalToolsPanelVisibility = toolsPanel.Visible;
-                    toolsPanel.Visible = false; // Hide tools panel
-                }
-
-                var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (onlySelectedField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
-                {
-                    settings.OriginalOnlySelectedState = onlySelectedCheckBox.Checked;
-                    onlySelectedCheckBox.Checked = true; // Check "Only Selected Drawable"
-                }
-
-                // Store original renderer clear colour
-                var rendererField = cwFormType.GetField("Renderer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (rendererField?.GetValue(CWHelper.CWForm) != null)
-                {
-                    var renderer = rendererField.GetValue(CWHelper.CWForm);
-                    var dxManField = renderer.GetType().GetField("DXMan", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    if (dxManField?.GetValue(renderer) != null)
-                    {
-                        var dxMan = dxManField.GetValue(renderer);
-                        var clearColourField = dxMan.GetType().GetField("clearcolour", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        if (clearColourField != null)
-                        {
-                            settings.OriginalClearColour = (System.Drawing.Color)clearColourField.GetValue(dxMan);
-                        }
-                    }
-                }
-
-                // Store and set transparent mode
-                var transparentModeField = cwFormType.GetField("isTransparentScreenshotMode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (transparentModeField != null)
-                {
-                    settings.OriginalTransparentMode = (bool)transparentModeField.GetValue(CWHelper.CWForm);
-                    transparentModeField.SetValue(CWHelper.CWForm, true);
-                }
-
-                // Set fixed resolution for screenshots - ONCE
-                var setFixedResolutionMethod = cwFormType.GetMethod("SetFixedResolution", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                setFixedResolutionMethod?.Invoke(CWHelper.CWForm, null);
-
-                LogHelper.Log("CodeWalker setup for batch screenshots completed", LogType.Info);
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Failed to setup CodeWalker for batch: {ex.Message}", LogType.Error);
-            }
-
-            return settings;
-        }
 
         private bool TakeCoreScreenshot(string drawableName, string customFilename)
         {
@@ -972,47 +918,14 @@ namespace grzyClothTool.Controls
                 }
                 string filePath = Path.Combine(screenshotDir, fileName);
 
-                // Focus camera on current drawable
-                CWHelper.FocusCameraOnDrawable();
-                
-                // Small delay for camera to settle  
-                System.Threading.Thread.Sleep(100);
+                // Brief delay for UI stability with GDI capture
+                System.Threading.Thread.Sleep(25);
 
                 // Call ONLY the absolute core capture method - ProcessTransparentScreenshotData
                 var cwFormType = CWHelper.CWForm.GetType();
                 
-                // Try to access the renderer directly and capture without any setup/teardown
-                var rendererField = cwFormType.GetField("Renderer", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (rendererField?.GetValue(CWHelper.CWForm) != null)
-                {
-                    var renderer = rendererField.GetValue(CWHelper.CWForm);
-                    var rendererType = renderer.GetType();
-                    
-                    // Try to get the device context and capture directly
-                    var deviceField = rendererType.GetField("Device", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    var contextField = rendererType.GetField("DeviceContext", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    
-                    if (deviceField?.GetValue(renderer) != null && contextField?.GetValue(renderer) != null)
-                    {
-                        // This is the most direct approach - manually capture the backbuffer
-                        return CaptureBackbufferDirectly(filePath, renderer);
-                    }
-                }
-                
-                // Fallback: Use reflection to call ProcessTransparentScreenshotData directly if available
-                var processMethod = cwFormType.GetMethod("ProcessTransparentScreenshotData", 
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                
-                if (processMethod != null)
-                {
-                    // This method should not trigger any resolution changes
-                    LogHelper.Log("Using ProcessTransparentScreenshotData method", LogType.Info);
-                    // We would need the correct parameters for this method
-                    return false; // Need to implement parameter gathering
-                }
-
-                LogHelper.Log("No suitable core capture method found", LogType.Warning);
-                return false;
+                // Use the simple GDI screenshot method
+                return CWHelper.TakeScreenshot(drawableName, customFilename);
             }
             catch (Exception ex)
             {
@@ -1054,49 +967,9 @@ namespace grzyClothTool.Controls
             }
         }
 
-        private void RestoreCodeWalkerSettings(CodeWalkerOriginalSettings settings)
-        {
-            try
-            {
-                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
-                {
-                    return;
-                }
 
-                var cwFormType = CWHelper.CWForm.GetType();
 
-                // Restore tools panel visibility
-                var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (toolsPanelField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.Control toolsPanel)
-                {
-                    toolsPanel.Visible = settings.OriginalToolsPanelVisibility;
-                }
 
-                // Restore only selected checkbox
-                var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (onlySelectedField?.GetValue(CWHelper.CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
-                {
-                    onlySelectedCheckBox.Checked = settings.OriginalOnlySelectedState;
-                }
-
-                // Restore transparent mode
-                var transparentModeField = cwFormType.GetField("isTransparentScreenshotMode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (transparentModeField != null)
-                {
-                    transparentModeField.SetValue(CWHelper.CWForm, settings.OriginalTransparentMode);
-                }
-
-                // Restore original resolution
-                var restoreOriginalMethod = cwFormType.GetMethod("RestoreOriginalSettings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                restoreOriginalMethod?.Invoke(CWHelper.CWForm, null);
-
-                LogHelper.Log("CodeWalker settings restored after batch screenshots", LogType.Info);
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Failed to restore CodeWalker settings: {ex.Message}", LogType.Error);
-            }
-        }
 
         private void CleanupDrawableMemory(GDrawable drawable)
         {

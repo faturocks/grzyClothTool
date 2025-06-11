@@ -9,6 +9,7 @@
 	  <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 	  <ApplicationIcon>Resources\grzyClothToolIcon.ico</ApplicationIcon>
 	  <FileVersion>1.0.3</FileVersion>
+	  <NoWarn>CS8612;CS8618;CS8603;CS1998;CS0169</NoWarn>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <DebugSymbols>False</DebugSymbols>

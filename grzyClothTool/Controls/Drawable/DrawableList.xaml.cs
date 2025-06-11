@@ -668,6 +668,9 @@ namespace grzyClothTool.Controls
 
             try
             {
+                // Optimize CodeWalker UI for screenshots
+                CWHelper.OptimizeCodeWalkerForScreenshots();
+                
                 string genderCode = selectedDrawable.Sex == Enums.SexType.male ? "M" : "F";
                 string gameIdString = selectedDrawable.DisplayNumberWithOffset;
 
@@ -683,13 +686,14 @@ namespace grzyClothTool.Controls
                         Value = texture.DisplayName
                     });
 
-                    // Wait for preview to update
-                    await Task.Delay(200);
+                    // Brief wait for preview to update (GDI is faster)
+                    await Task.Delay(50);
 
                     // Generate filename with the specified format
                     string filename = $"{genderCode}_{selectedDrawable.TypeNumeric}_{gameIdString}_{i}.png";
 
                     // Take the screenshot with custom filename
+                    // bool success = CWHelper.TakeScreenshot(selectedDrawable.Name, filename);
                     bool success = CWHelper.TakeScreenshot(selectedDrawable.Name, filename);
 
                     if (!success)
@@ -725,11 +729,8 @@ namespace grzyClothTool.Controls
 
             try
             {
-                bool success = CWHelper.FocusCameraOnDrawable();
-                if (!success)
-                {
-                    CustomMessageBox.Show("Failed to focus camera. Make sure the preview window is active.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
-                }
+                // Camera focus functionality removed with DirectX cleanup
+                CustomMessageBox.Show("Camera focus functionality has been removed.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
             }
             catch (Exception ex)
             {

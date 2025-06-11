@@ -7,6 +7,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using grzyClothTool.Extensions;
+using grzyClothTool.Helpers;
+using grzyClothTool.Views;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.Reflection;
 
 namespace grzyClothTool.Helpers;
 public static class CWHelper
@@ -18,6 +26,42 @@ public static class CWHelper
     private static readonly YtdFile _ytdFile = new();
 
     private static Enums.SexType PrevDrawableSex;
+
+    // Win32 API declarations for screenshot capture
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool BitBlt(IntPtr hdc, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindowDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    private const uint SRCCOPY = 0x00CC0020;
 
     public static void Init()
     {
@@ -65,58 +109,32 @@ public static class CWHelper
             _ => throw new NotSupportedException($"Unsupported file extension: {texture.Extension}"),
         };
 
-        RpfFileEntry rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
-        var decompressedData = ResourceBuilder.Decompress(data);
-        YtdFile ytd = RpfFile.GetFile<YtdFile>(rpf, decompressedData);
-        ytd.Name = Path.GetFileNameWithoutExtension(name);
-
-        return ytd;
+        var ytdFile = new YtdFile();
+        ytdFile.Load(data);
+        return ytdFile;
     }
 
-    public static YddFile CreateYddFile(GDrawable d)
+    public static YddFile CreateYddFile(GDrawable drawable)
     {
-        try
-        {
-            byte[] data = File.ReadAllBytes(d.FilePath);
+        byte[] data = File.ReadAllBytes(drawable.FilePath);
 
-            RpfFileEntry rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
-            var decompressedData = ResourceBuilder.Decompress(data);
-            YddFile ydd = RpfFile.GetFile<YddFile>(rpf, decompressedData);
-            var drawable = ydd.Drawables.First();
-            drawable.Name = Path.GetFileNameWithoutExtension(d.Name);
-
-            drawable.IsHairScaleEnabled = d.EnableHairScale;
-            if (drawable.IsHairScaleEnabled)
-            {
-                drawable.HairScaleValue = d.HairScaleValue;
-            }
-
-            drawable.IsHighHeelsEnabled = d.EnableHighHeels;
-            if (drawable.IsHighHeelsEnabled)
-            {
-                drawable.HighHeelsValue = d.HighHeelsValue / 10;
-            }
-
-            return ydd;
-        }
-        catch (Exception ex)
-        {
-            TelemetryHelper.CaptureExceptionWithAttachment(ex, d.FilePath);
-            throw;
-        }
+        var yddFile = new YddFile();
+        yddFile.Load(data);
+        return yddFile;
     }
 
-    public static void SetPedModel(Enums.SexType sexType)
+    public static void SetPedModel(Enums.SexType sex)
     {
-        string pedModel = sexType == Enums.SexType.male ? "mp_m_freemode_01" : "mp_f_freemode_01";
-        PrevDrawableSex = sexType;
+        if (CWForm == null) return;
+
+        var pedModel = sex == Enums.SexType.male ? "mp_m_freemode_01" : "mp_f_freemode_01";
         CWForm.PedModel = pedModel;
+
+        PrevDrawableSex = sex;
     }
 
     public static void SendDrawableUpdateToPreview(EventArgs args)
     {
-        // MainWindow.AddonManager.IsPreviewEnabled is still true, but preview window is closed already
-        // It causes deadlock if user is fast enough to select different drawable. Check if form is open
         if (!CWForm.formopen || CWForm.isLoading) return;
 
         var selectedDrawables = MainWindow.AddonManager.SelectedAddon.SelectedDrawables;
@@ -190,57 +208,140 @@ public static class CWHelper
         }
     }
 
-    public static bool TakeScreenshot(string drawableName, string customFilename = null)
+    /// <summary>
+    /// Automatically optimizes CodeWalker UI settings for screenshots
+    /// - Closes tools panel for cleaner screenshots
+    /// - Enables "Selected Drawable Only" for better focus
+    /// </summary>
+    public static void OptimizeCodeWalkerForScreenshots()
     {
         try
         {
             if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
             {
-                return false;
+                return;
             }
 
-            // Use reflection to call the method to avoid compilation issues
-            var method = CWForm.GetType().GetMethod("TakeScreenshot", new[] { typeof(string), typeof(string) });
-            if (method != null)
+            LogHelper.Log("Optimizing CodeWalker UI for screenshots...", LogType.Info);
+
+            var cwFormType = CWForm.GetType();
+
+            // Close tools panel for cleaner screenshots
+            var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (toolsPanelField?.GetValue(CWForm) is System.Windows.Forms.Control toolsPanel)
             {
-                var result = method.Invoke(CWForm, new object[] { drawableName, customFilename });
-                return result is bool success && success;
+                if (toolsPanel.Visible)
+                {
+                    toolsPanel.Visible = false;
+                    LogHelper.Log("Tools panel closed for cleaner screenshots", LogType.Info);
+                }
             }
-            
-            return false;
+
+            // Enable "Selected Drawable Only" for better focus
+            var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (onlySelectedField?.GetValue(CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
+            {
+                if (!onlySelectedCheckBox.Checked)
+                {
+                    onlySelectedCheckBox.Checked = true;
+                    LogHelper.Log("'Selected Drawable Only' enabled for focused screenshots", LogType.Info);
+                }
+            }
+
+            // Hide console panel if visible for cleaner screenshots
+            var consolePanelField = cwFormType.GetField("ConsolePanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (consolePanelField?.GetValue(CWForm) is System.Windows.Forms.Control consolePanel)
+            {
+                if (consolePanel.Visible)
+                {
+                    consolePanel.Visible = false;
+                    LogHelper.Log("Console panel hidden for cleaner screenshots", LogType.Info);
+                }
+            }
+
+            LogHelper.Log("CodeWalker UI optimization completed", LogType.Info);
         }
         catch (Exception ex)
         {
-            // Screenshot functionality not available in this version of CodeWalker
-            System.Diagnostics.Debug.WriteLine($"Screenshot failed: {ex.Message}");
-            return false;
+            LogHelper.Log($"Failed to optimize CodeWalker UI: {ex.Message}", LogType.Warning);
         }
     }
 
-    public static bool FocusCameraOnDrawable()
+    /// <summary>
+    /// Takes a screenshot using the enhanced alpha mask method
+    /// For each cloth, generates alpha mask once in Vertex Colour 2 mode, then applies it to all texture variations
+    /// </summary>
+    /// <param name="drawableName">Name of the drawable being captured</param>
+    /// <param name="fileName">Name for the screenshot file</param>
+    /// <param name="useAlphaMask">Whether to use alpha mask approach (default: true)</param>
+    /// <returns>True if screenshot was taken successfully</returns>
+    public static bool TakeScreenshot(string drawableName, string fileName, bool useAlphaMask = true)
     {
         try
         {
-            if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
+            LogHelper.Log($"Starting TakeScreenshot for {drawableName} (AlphaMask: {useAlphaMask})", LogType.Info);
+            
+            if (CWForm == null)
             {
+                LogHelper.Log("ERROR: CWForm is null", LogType.Error);
                 return false;
             }
-
-            // Use reflection to call the method to avoid compilation issues
-            var method = CWForm.GetType().GetMethod("FocusOnSelectedDrawable", Type.EmptyTypes);
-            if (method != null)
+            
+            // Automatically optimize CodeWalker UI for screenshots
+            OptimizeCodeWalkerForScreenshots();
+            
+            string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string defaultScreenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
+            
+            // Ensure directory exists
+            if (!Directory.Exists(defaultScreenshotDir))
             {
-                method.Invoke(CWForm, null);
-                return true;
+                Directory.CreateDirectory(defaultScreenshotDir);
             }
             
-            return false;
+            string fullFilePath = Path.Combine(defaultScreenshotDir, fileName);
+            LogHelper.Log($"Full file path: {fullFilePath}", LogType.Info);
+            
+            // Brief delay for UI refresh with GDI capture  
+            System.Threading.Thread.Sleep(50);
+            
+            // Use the enhanced alpha mask screenshot method
+            bool success;
+            if (useAlphaMask)
+            {
+                LogHelper.Log("Using alpha mask screenshot method", LogType.Info);
+                success = CWForm.TakeGDIScreenshotWithAlphaMask(fullFilePath, drawableName, true);
+            }
+            else
+            {
+                LogHelper.Log("Using direct blue removal method", LogType.Info);
+                success = CWForm.TakeGDIScreenshot(fullFilePath);
+            }
+            
+            LogHelper.Log($"Screenshot method completed, result: {success}", LogType.Info);
+            
+            if (!success)
+            {
+                LogHelper.Log($"WARNING: Screenshot method returned false for: {fileName}", LogType.Warning);
+                
+                // Check if file was actually created despite returning false
+                if (File.Exists(fullFilePath))
+                {
+                    LogHelper.Log($"INFO: File was created despite method returning false: {fullFilePath}", LogType.Info);
+                    return true;
+                }
+            }
+            
+            System.Threading.Thread.Sleep(25); // Brief delay for stability
+            
+            return success;
         }
         catch (Exception ex)
         {
-            // Camera focus functionality not available
-            System.Diagnostics.Debug.WriteLine($"Camera focus failed: {ex.Message}");
+            LogHelper.Log($"ERROR: TakeScreenshot failed: {ex.Message}", LogType.Error);
+            LogHelper.Log($"ERROR: Exception stack trace: {ex.StackTrace}", LogType.Error);
             return false;
         }
     }
+
 }

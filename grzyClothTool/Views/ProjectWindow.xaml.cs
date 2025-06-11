@@ -498,6 +498,21 @@ namespace grzyClothTool.Views
 
             if (!MainWindow.AddonManager.IsPreviewEnabled) return;
 
+            // Check if the drawable exists in LoadedDrawables before accessing it
+            if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(Addon.SelectedDrawable.Name))
+            {
+                // If drawable is not loaded, load it first
+                var ydd = CWHelper.CreateYddFile(Addon.SelectedDrawable);
+                if (ydd != null && ydd.Drawables.Length > 0)
+                {
+                    CWHelper.CWForm.LoadedDrawables[Addon.SelectedDrawable.Name] = ydd.Drawables.First();
+                }
+                else
+                {
+                    return; // Can't load drawable, skip texture update
+                }
+            }
+
             var ytd = CWHelper.CreateYtdFile(Addon.SelectedTexture, Addon.SelectedTexture.DisplayName);
             var cwydd = CWHelper.CWForm.LoadedDrawables[Addon.SelectedDrawable.Name];
             CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
