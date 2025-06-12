@@ -671,6 +671,9 @@ namespace grzyClothTool.Controls
                 // Optimize CodeWalker UI for screenshots
                 CWHelper.OptimizeCodeWalkerForScreenshots();
                 
+                // Auto focus camera on the selected drawable
+                CWHelper.AutoFocusCamera(selectedDrawable.Name);
+                
                 string genderCode = selectedDrawable.Sex == Enums.SexType.male ? "M" : "F";
                 string gameIdString = selectedDrawable.DisplayNumberWithOffset;
 
@@ -729,8 +732,8 @@ namespace grzyClothTool.Controls
 
             try
             {
-                // Camera focus functionality removed with DirectX cleanup
-                CustomMessageBox.Show("Camera focus functionality has been removed.", "Focus Camera", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                // Focus camera on the selected drawable
+                CWHelper.AutoFocusCamera(selectedDrawable.Name);
             }
             catch (Exception ex)
             {

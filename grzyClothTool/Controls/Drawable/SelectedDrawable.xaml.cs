@@ -648,39 +648,53 @@ namespace grzyClothTool.Controls
             SaveHelper.SetUnsavedChanges(true);
         }
 
-        private async Task<bool> WaitForScreenshotFile(string filename, int timeoutMs = 5000)
+        private async Task<bool> WaitForScreenshotFile(string filename, int timeoutMs = 10000)
         {
             // Get the expected file path where screenshots are saved
             string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
             string filePath = Path.Combine(screenshotDir, filename);
 
+            LogHelper.Log($"Waiting for screenshot file: {filePath}", LogType.Info);
+
             // Wait for the file to exist with polling
             int elapsedMs = 0;
-            const int pollIntervalMs = 50;
+            const int pollIntervalMs = 100; // Increased poll interval
+            int fileCheckAttempts = 0;
 
             while (elapsedMs < timeoutMs)
             {
+                fileCheckAttempts++;
+                
                 if (File.Exists(filePath))
                 {
-                    // File exists, now wait a bit more to ensure it's fully written
-                    await Task.Delay(100);
-                    
-                    // Double-check by trying to open the file (ensures it's not locked)
                     try
                     {
-                        using (var fileStream = File.OpenRead(filePath))
+                        // Check file size to ensure it's not empty
+                        var fileInfo = new FileInfo(filePath);
+                        if (fileInfo.Length > 0)
                         {
-                            // If we can open it, the file is fully written
-                            return true;
+                            // Try to open the file to ensure it's fully written and not locked
+                            using (var fileStream = File.OpenRead(filePath))
+                            {
+                                // File is accessible and has content
+                                LogHelper.Log($"Screenshot file found and verified after {elapsedMs}ms: {filename} (Size: {fileInfo.Length} bytes)", LogType.Info);
+                                return true;
+                            }
+                        }
+                        else
+                        {
+                            LogHelper.Log($"Screenshot file exists but is empty (attempt {fileCheckAttempts}): {filename}", LogType.Warning);
                         }
                     }
-                    catch (IOException)
+                    catch (IOException ex)
                     {
-                        // File is still being written, wait a bit more
-                        await Task.Delay(pollIntervalMs);
-                        elapsedMs += pollIntervalMs;
-                        continue;
+                        LogHelper.Log($"Screenshot file exists but is locked (attempt {fileCheckAttempts}): {ex.Message}", LogType.Warning);
+                        // File is still being written, continue waiting
+                    }
+                    catch (Exception ex)
+                    {
+                        LogHelper.Log($"Error checking screenshot file (attempt {fileCheckAttempts}): {ex.Message}", LogType.Warning);
                     }
                 }
 
@@ -688,7 +702,15 @@ namespace grzyClothTool.Controls
                 elapsedMs += pollIntervalMs;
             }
 
-            // Timeout reached
+            // Timeout reached - final check
+            if (File.Exists(filePath))
+            {
+                var fileInfo = new FileInfo(filePath);
+                LogHelper.Log($"Screenshot file exists at timeout but verification failed: {filename} (Size: {fileInfo.Length} bytes)", LogType.Warning);
+                return fileInfo.Length > 0; // Return true if file exists and has content, even if we couldn't verify it fully
+            }
+
+            LogHelper.Log($"Screenshot file not found after {timeoutMs}ms timeout: {filename}", LogType.Error);
             return false;
         }
 
@@ -700,12 +722,14 @@ namespace grzyClothTool.Controls
                 return;
             }
 
-            // Show category selection dialog (same as DELETE HIGH POLYGON MODELS)
+            // Show category selection dialog
             var includedCategories = ShowCategorySelectionDialog();
-            if (includedCategories == null) // User cancelled
-                return;
+            if (includedCategories == null || includedCategories.Count == 0)
+            {
+                return; // User cancelled or no categories selected
+            }
 
-            // Collect all drawables from selected categories
+            // Collect all drawables from selected categories (from all addons)
             var drawablesToScreenshot = new List<GDrawable>();
             foreach (var addon in MainWindow.AddonManager.Addons)
             {
@@ -747,16 +771,62 @@ namespace grzyClothTool.Controls
 
             try
             {
+                // Clear all currently loaded drawables to prevent mixing categories
+                if (CWHelper.CWForm.LoadedDrawables.Count > 0)
+                {
+                    LogHelper.Log("Clearing all loaded drawables before starting screenshot process", LogType.Info);
+                    
+                    // Clear loaded textures first
+                    CWHelper.CWForm.LoadedTextures.Clear();
+                    
+                    // Clear loaded drawables
+                    CWHelper.CWForm.LoadedDrawables.Clear();
+                    
+                    // Refresh the preview to clear any displayed drawable
+                    CWHelper.CWForm.Refresh();
+                }
+                
                 // Optimize CodeWalker UI for batch screenshots
                 CWHelper.OptimizeCodeWalkerForScreenshots();
                 
                 int successCount = 0;
                 int totalCount = 0;
+                Enums.SexType? currentGender = null; // Track current gender to detect changes
 
                 foreach (var drawable in drawablesToScreenshot)
                 {
                     try
                     {
+                        // Check if gender has changed and update ped model accordingly
+                        if (currentGender != drawable.Sex)
+                        {
+                            LogHelper.Log($"Gender change detected: switching from {currentGender?.ToString() ?? "none"} to {drawable.Sex}", LogType.Info);
+                            
+                            // Clear any loaded drawables before switching gender to prevent conflicts
+                            if (CWHelper.CWForm.LoadedDrawables.Count > 0)
+                            {
+                                CWHelper.CWForm.LoadedTextures.Clear();
+                                CWHelper.CWForm.LoadedDrawables.Clear();
+                                CWHelper.CWForm.Refresh();
+                                LogHelper.Log("Cleared loaded drawables before gender switch", LogType.Info);
+                            }
+                            
+                            // Clear alpha mask cache to prevent cross-gender contamination
+                            CWHelper.ClearAlphaMaskCache();
+                            LogHelper.Log("Cleared alpha mask cache before gender switch", LogType.Info);
+                            
+                            // Set the appropriate ped model for the new gender
+                            CWHelper.SetPedModel(drawable.Sex);
+                            currentGender = drawable.Sex;
+                            
+                            // Longer delay to allow the ped model to load properly and stabilize
+                            await Task.Delay(500);
+                            LogHelper.Log($"Ped model updated to {drawable.Sex}", LogType.Info);
+                            
+                            // Re-optimize CodeWalker after gender switch to ensure proper state
+                            CWHelper.OptimizeCodeWalkerForScreenshots();
+                        }
+
                         string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
                         string gameIdString = drawable.DisplayNumberWithOffset;
 
@@ -771,6 +841,7 @@ namespace grzyClothTool.Controls
                                 MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
                                 
                                 // Load the texture into the drawable
+                                bool isNewDrawable = false;
                                 if (texture != null)
                                 {
                                     // Check if the drawable exists in LoadedDrawables before accessing it
@@ -781,6 +852,7 @@ namespace grzyClothTool.Controls
                                         if (ydd != null && ydd.Drawables.Length > 0)
                                         {
                                             CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
+                                            isNewDrawable = true; // Mark as new drawable for auto-focus
                                         }
                                         else
                                         {
@@ -794,6 +866,12 @@ namespace grzyClothTool.Controls
                                     CWHelper.CWForm.Refresh();
                                 }
                                 
+                                // Auto-focus camera when a new drawable is loaded (cloth changes, not texture variation)
+                                if (isNewDrawable)
+                                {
+                                    CWHelper.AutoFocusCamera(drawable.Name);
+                                }
+                                
                                 // Brief wait for texture to load
                                 await Task.Delay(25);
 
@@ -802,20 +880,19 @@ namespace grzyClothTool.Controls
 
                                 // Take screenshot using GDI method
                                 bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
-                                LogHelper.Log($"Screenshot sonucu: {success} for {filename}", LogType.Info);
+                                LogHelper.Log($"Screenshot method returned: {success} for {filename}", LogType.Info);
 
-                                if (success)
+                                // Always check if file was actually created, regardless of return value
+                                // The TakeScreenshot method has fallback logic that may create files even when returning false
+                                bool fileSaved = await WaitForScreenshotFile(filename);
+                                if (fileSaved)
                                 {
-                                    // Wait for the screenshot file to be actually saved to disk
-                                    bool fileSaved = await WaitForScreenshotFile(filename);
-                                    if (fileSaved)
-                                    {
-                                        successCount++;
-                                    }
-                                    else
-                                    {
-                                        LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
-                                    }
+                                    successCount++;
+                                    LogHelper.Log($"Screenshot file successfully saved: {filename}", LogType.Info);
+                                }
+                                else
+                                {
+                                    LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
                                 }
                             }
                             catch (Exception ex)

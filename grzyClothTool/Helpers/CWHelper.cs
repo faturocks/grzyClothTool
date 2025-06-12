@@ -16,6 +16,7 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Reflection;
 using System.Threading;
+using SharpDX;
 
 namespace grzyClothTool.Helpers;
 public static class CWHelper
@@ -129,9 +130,37 @@ public static class CWHelper
         if (CWForm == null) return;
 
         var pedModel = sex == Enums.SexType.male ? "mp_m_freemode_01" : "mp_f_freemode_01";
-        CWForm.PedModel = pedModel;
+        
+        try
+        {
+            LogHelper.Log($"Setting ped model to {pedModel} for gender {sex}", LogType.Info);
+            
+            // Set the ped model property
+            CWForm.PedModel = pedModel;
+            
+            // Use reflection to call the LoadPed method to properly load the new ped model
+            var loadPedMethod = CWForm.GetType().GetMethod("LoadPed", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (loadPedMethod != null)
+            {
+                loadPedMethod.Invoke(CWForm, new object[] { pedModel });
+                LogHelper.Log($"Successfully loaded ped model: {pedModel}", LogType.Info);
+            }
+            else
+            {
+                LogHelper.Log("WARNING: LoadPed method not found, using fallback", LogType.Warning);
+                // Fallback: just set the PedModel property
+                CWForm.PedModel = pedModel;
+            }
 
-        PrevDrawableSex = sex;
+            PrevDrawableSex = sex;
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Error setting ped model: {ex.Message}", LogType.Error);
+            // Fallback to just setting the property
+            CWForm.PedModel = pedModel;
+            PrevDrawableSex = sex;
+        }
     }
 
     public static void SendDrawableUpdateToPreview(EventArgs args)
@@ -265,6 +294,81 @@ public static class CWHelper
         catch (Exception ex)
         {
             LogHelper.Log($"Failed to optimize CodeWalker UI: {ex.Message}", LogType.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Auto focuses the camera on the specified drawable using the user's specified logic:
+    /// - Calculate distance between pivot (BoundingCenter) and bounding box center
+    /// - If distance > 2: use pivot point with distance 3
+    /// - If distance <= 2: use bounding box center and bounding sphere radius
+    /// </summary>
+    /// <param name="drawableName">Name of the drawable to focus on</param>
+    public static void AutoFocusCamera(string drawableName)
+    {
+        try
+        {
+            if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
+            {
+                LogHelper.Log("Cannot focus camera: CodeWalker form is not available", LogType.Warning);
+                return;
+            }
+
+            if (!CWForm.LoadedDrawables.ContainsKey(drawableName))
+            {
+                LogHelper.Log($"Cannot focus camera: Drawable '{drawableName}' is not loaded", LogType.Warning);
+                return;
+            }
+
+            var loadedDrawable = CWForm.LoadedDrawables[drawableName];
+            if (loadedDrawable == null)
+            {
+                LogHelper.Log($"Cannot focus camera: Loaded drawable '{drawableName}' is null", LogType.Warning);
+                return;
+            }
+
+            // Get bounding information from the drawable
+            var pivot = loadedDrawable.BoundingCenter; // This is the pivot point
+            var boundingBoxCenter = (loadedDrawable.BoundingBoxMin + loadedDrawable.BoundingBoxMax) * 0.5f;
+            var boundingSphereRadius = loadedDrawable.BoundingSphereRadius;
+
+            SharpDX.Vector3 targetPosition;
+            float targetRadius;
+            //calculate distance between pivot and bounding box center
+
+            // Check if sphere radius > (absolute value of Z distance * 2)
+            if (pivot.Z > 1.12f && Math.Abs(pivot.Z) > boundingSphereRadius * 1.6f)
+            {
+                // Set Z to 0 and distance to 3
+                targetPosition = new SharpDX.Vector3(0, 0, 0);
+                targetRadius = 1.3f;
+                LogHelper.Log($"Auto focus: Large sphere detected, using Z=0 with distance {targetRadius} (sphere radius: {boundingSphereRadius:F2}, real Z: {pivot.Z:F2})", LogType.Info);
+            }
+            else
+            {
+                // Use the Z axis of pivot point and bounding sphere radius
+                targetPosition = new SharpDX.Vector3(0, 0, pivot.Z);
+                targetRadius = boundingSphereRadius;
+                LogHelper.Log($"Auto focus: Using pivot Z position {pivot.Z:F2} with sphere radius {boundingSphereRadius:F2}", LogType.Info);
+            }
+
+            // Call the MoveCameraToView method
+            var moveCameraMethod = CWForm.GetType().GetMethod("MoveCameraToView", 
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            
+            if (moveCameraMethod != null)
+            {
+                moveCameraMethod.Invoke(CWForm, new object[] { targetPosition, targetRadius });
+                // LogHelper.Log($"Camera focused on drawable '{drawableName}' at position ({targetPosition.X:F2}, {targetPosition.Y:F2}, {targetPosition.Z:F2}) with radius {targetRadius:F2}", LogType.Info);
+            }
+            else
+            {
+                LogHelper.Log("Cannot focus camera: MoveCameraToView method not found", LogType.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Error focusing camera on drawable '{drawableName}': {ex.Message}", LogType.Error);
         }
     }
 
@@ -496,6 +600,64 @@ public static class CWHelper
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"RestoreOriginalResolution failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Clears the alpha mask cache in CodeWalker to prevent cross-gender contamination
+    /// This is critical when switching between male and female clothes during batch processing
+    /// </summary>
+    public static void ClearAlphaMaskCache()
+    {
+        try
+        {
+            if (CWForm != null)
+            {
+                // Use reflection to access the static alphaMaskCache field
+                var cwFormType = CWForm.GetType();
+                var alphaMaskCacheField = cwFormType.GetField("alphaMaskCache", BindingFlags.NonPublic | BindingFlags.Static);
+                
+                if (alphaMaskCacheField != null)
+                {
+                    var cacheDict = alphaMaskCacheField.GetValue(null) as System.Collections.IDictionary;
+                    if (cacheDict != null)
+                    {
+                        int cacheCount = cacheDict.Count;
+                        
+                        // Dispose any bitmap objects in the cache first
+                        foreach (var key in cacheDict.Keys)
+                        {
+                            var bitmap = cacheDict[key] as System.Drawing.Bitmap;
+                            bitmap?.Dispose();
+                        }
+                        
+                        // Clear the cache
+                        cacheDict.Clear();
+                        LogHelper.Log($"Alpha mask cache cleared successfully ({cacheCount} items disposed)", LogType.Info);
+                    }
+                    else
+                    {
+                        LogHelper.Log("Alpha mask cache is null", LogType.Warning);
+                    }
+                }
+                else
+                {
+                    LogHelper.Log("Could not find alphaMaskCache field using reflection", LogType.Warning);
+                }
+                
+                // Also clear crop parameters cache if it exists
+                var cropParamsCacheField = cwFormType.GetField("cropParametersCache", BindingFlags.NonPublic | BindingFlags.Static);
+                if (cropParamsCacheField != null)
+                {
+                    var cropCache = cropParamsCacheField.GetValue(null) as System.Collections.IDictionary;
+                    cropCache?.Clear();
+                    LogHelper.Log("Crop parameters cache cleared", LogType.Info);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Failed to clear alpha mask cache: {ex.Message}", LogType.Error);
         }
     }
 
