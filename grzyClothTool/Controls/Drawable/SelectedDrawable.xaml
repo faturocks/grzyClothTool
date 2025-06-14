@@ -433,8 +433,8 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <c:ModernLabelCheckBox Tag="EnableKeepPreview" Label="Keep preview" IsChecked="{Binding SelectedAddon.SelectedDrawable.EnableKeepPreview}" IsUpdated="SelectedDrawable_Updated" />
-                                            <c:CustomButton Label="TAKE ALL SCREENSHOTS" Padding="5" CornerRadius="5" DropdownEnabled="False" MyBtnClickEvent="TakeAllScreenshots_Click" Margin="0,5,0,0" />
+                                                                        <c:ModernLabelCheckBox Tag="EnableKeepPreview" Label="Keep preview" IsChecked="{Binding SelectedAddon.SelectedDrawable.EnableKeepPreview}" IsUpdated="SelectedDrawable_Updated" />
+                            <c:CustomButton Label="TAKE ALL SCREENSHOTS" Padding="5" CornerRadius="5" DropdownEnabled="False" MyBtnClickEvent="TakeAllScreenshots_Click" Margin="0,5,0,0" />
                                         </StackPanel>
                                     </GroupBox>
                                 </Grid>

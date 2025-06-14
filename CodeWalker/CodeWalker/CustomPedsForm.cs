@@ -1065,6 +1065,12 @@ namespace CodeWalker
             UpdateModelsUI();
         }
 
+        public void SetNativeComponentDrawable(int compIndex, int drawableIndex, int altIndex, int textureIndex)
+        {
+            SelectedPed.SetComponentDrawable(compIndex, drawableIndex, altIndex, textureIndex, GameFileCache);
+            UpdateModelsUI();
+        }
+
         private void LoadClipDict(string name)
         {
             var ycdhash = JenkHash.GenHash(name.ToLowerInvariant());
@@ -1748,30 +1754,30 @@ namespace CodeWalker
         /// </summary>
         /// <param name="clothName">Name of the cloth to generate mask for</param>
         /// <returns>Alpha mask bitmap, or null if failed</returns>
-        public System.Drawing.Bitmap GenerateAlphaMask(string clothName)
+        public System.Drawing.Bitmap GenerateAlphaMaske(string clothName)
         {
             try
             {
                 System.Diagnostics.Debug.WriteLine($"=== GenerateAlphaMask START for: {clothName} ===");
                 
-                // Check if mask already exists in cache
-                if (alphaMaskCache.ContainsKey(clothName))
-                {
-                    System.Diagnostics.Debug.WriteLine($"Alpha mask found in cache for {clothName}");
-                    return alphaMaskCache[clothName];
-                }
+                // // Check if mask already exists in cache
+                // if (alphaMaskCache.ContainsKey(clothName))
+                // {
+                //     System.Diagnostics.Debug.WriteLine($"Alpha mask found in cache for {clothName}");
+                //     return alphaMaskCache[clothName];
+                // }
                 
                 // Store current render mode
                 string originalRenderMode = RenderModeComboBox.Text;
-                System.Diagnostics.Debug.WriteLine($"Current render mode: {originalRenderMode}");
                 
                 // Switch to Vertex Colour 2 mode
-                RenderModeComboBox.Text = "Vertex colour 2";
+                // RenderModeComboBox.Text = "Vertex colour 2";
+                RenderModeComboBox.SelectedIndex = 5;
                 System.Diagnostics.Debug.WriteLine("Switched to Vertex Colour 2 mode");
                 
                 // Longer delay to ensure render mode change takes effect completely
                 System.Threading.Thread.Sleep(200); // Increased from 100ms
-                this.Refresh(); // Force a refresh to ensure mode change is applied
+                // this.Refresh(); // Force a refresh to ensure mode change is applied
                 System.Threading.Thread.Sleep(100); // Additional delay after refresh
                 System.Diagnostics.Debug.WriteLine("Render mode switch should be complete");
                 
@@ -1820,13 +1826,13 @@ namespace CodeWalker
                 System.Diagnostics.Debug.WriteLine($"Alpha mask cropped to {finalMask.Width}x{finalMask.Height} and cached");
                 
                 // Restore original render mode for textured screenshots
-                RenderModeComboBox.Text = originalRenderMode;
+                // RenderModeComboBox.Text = originalRenderMode;
                 System.Diagnostics.Debug.WriteLine($"Restored render mode to: {originalRenderMode} for textured screenshots");
                 
                 // CRITICAL: Wait for render mode to switch back completely
+                RenderModeComboBox.SelectedIndex = 0;
                 System.Threading.Thread.Sleep(200); // Ensure mode switch completes
-                this.Refresh(); // Force refresh to apply mode change
-                System.Threading.Thread.Sleep(100); // Additional delay after refresh
+                // this.Refresh(); // Force refresh to apply mode change
                 System.Diagnostics.Debug.WriteLine($"Render mode switch back to {originalRenderMode} should be complete");
                 
                 System.Diagnostics.Debug.WriteLine($"=== GenerateAlphaMask END SUCCESS for: {clothName} ===");
@@ -2013,15 +2019,9 @@ namespace CodeWalker
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"=== TakeGDIScreenshotWithAlphaMask START ===");
-                System.Diagnostics.Debug.WriteLine($"FilePath: {filePath}");
-                System.Diagnostics.Debug.WriteLine($"ClothName: {clothName}");
-                System.Diagnostics.Debug.WriteLine($"UseAlphaMask: {useAlphaMask}");
-                System.Diagnostics.Debug.WriteLine($"RenderResolution: {renderResolution}");
-                System.Diagnostics.Debug.WriteLine($"OutputResolution: {outputResolution}");
                 
                 // Enable double-sided rendering for better screenshot quality
-                EnableDoubleSidedRendering();
+                // EnableDoubleSidedRendering();
                 
                 // Check if this is the first texture (index 0) - generate alpha mask for this cloth
                 bool isFirstTexture = !string.IsNullOrEmpty(filePath) && filePath.EndsWith("_0.png");
@@ -2031,7 +2031,8 @@ namespace CodeWalker
                     System.Diagnostics.Debug.WriteLine("🔄 FIRST TEXTURE: Generating alpha mask while cloth is visible");
                     
                     // Generate alpha mask NOW while the cloth is properly loaded and visible
-                    System.Drawing.Bitmap alphaMask = GenerateAlphaMask(clothName);
+                    System.Drawing.Bitmap alphaMask = GenerateAlphaMaske(clothName);
+                    // System.Drawing.Bitmap alphaMask = new System.Drawing.Bitmap(1024, 1024, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                     if (alphaMask != null)
                     {
                         alphaMask.Dispose(); // We only need it cached, not returned
@@ -2042,7 +2043,7 @@ namespace CodeWalker
                         System.Threading.Thread.Sleep(200); // Increased delay to ensure mode switch completes
                         
                         // Force a refresh to ensure the textured view is properly rendered
-                        this.Refresh();
+                        // this.Refresh();
                         System.Threading.Thread.Sleep(100); // Additional delay after refresh
                         
                         System.Diagnostics.Debug.WriteLine("✓ Render mode should now be back to textured mode");
@@ -2180,7 +2181,7 @@ namespace CodeWalker
                     fullBitmap.Dispose();
                     
                     // Restore original rendering settings
-                    RestoreOriginalRenderingSettings();
+                    // RestoreOriginalRenderingSettings();
                     
                     return success;
                 }
@@ -2883,62 +2884,7 @@ namespace CodeWalker
             }
         }
 
-        /// <summary>
-        /// Pre-generates alpha mask for a cloth and caches it for later use
-        /// This should be called BEFORE processing any texture indices
-        /// </summary>
-        /// <param name="clothName">Name of the cloth to generate alpha mask for</param>
-        /// <returns>True if alpha mask was generated and cached successfully</returns>
-        public bool PreGenerateAlphaMask(string clothName)
-        {
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"=== PRE-GENERATE ALPHA MASK DEBUG ===");
-                System.Diagnostics.Debug.WriteLine($"Input clothName: '{clothName}'");
-                
-                if (string.IsNullOrEmpty(clothName))
-                {
-                    System.Diagnostics.Debug.WriteLine("⚠️ PreGenerateAlphaMask: clothName is null or empty");
-                    return false;
-                }
-                
-                // Check if alpha mask is already cached
-                if (alphaMaskCache.ContainsKey(clothName))
-                {
-                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask for '{clothName}' already exists in cache");
-                    var existingMask = alphaMaskCache[clothName];
-                    System.Diagnostics.Debug.WriteLine($"Existing mask size: {existingMask?.Width}x{existingMask?.Height}");
-                    return true;
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"🔄 Pre-generating alpha mask for cloth: {clothName}");
-                System.Diagnostics.Debug.WriteLine($"Current cache count before generation: {alphaMaskCache.Count}");
-                
-                // Generate the alpha mask (this will cache it internally)
-                System.Drawing.Bitmap alphaMask = GenerateAlphaMask(clothName);
-                
-                if (alphaMask != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask generated successfully: {alphaMask.Width}x{alphaMask.Height}");
-                    System.Diagnostics.Debug.WriteLine($"Cache count after generation: {alphaMaskCache.Count}");
-                    System.Diagnostics.Debug.WriteLine($"Cache contains key '{clothName}': {alphaMaskCache.ContainsKey(clothName)}");
-                    
-                    alphaMask.Dispose(); // We only need it cached, not the returned reference
-                    System.Diagnostics.Debug.WriteLine($"✓ Alpha mask pre-generated and cached for '{clothName}'");
-                    return true;
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"❌ Failed to pre-generate alpha mask for '{clothName}'");
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"❌ PreGenerateAlphaMask exception: {ex.Message}");
-                return false;
-            }
-        }
+      
     }
 }
 

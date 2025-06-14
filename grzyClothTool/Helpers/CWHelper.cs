@@ -243,57 +243,33 @@ public static class CWHelper
     /// - Closes tools panel for cleaner screenshots
     /// - Enables "Selected Drawable Only" for better focus
     /// </summary>
-    public static void OptimizeCodeWalkerForScreenshots()
+    public static void OptimizeCodeWalkerForScreenshots(bool native = false)
     {
-        try
+        if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
         {
-            if (CWForm == null || CWForm.IsDisposed || !CWForm.formopen)
-            {
-                return;
-            }
-
-            LogHelper.Log("Optimizing CodeWalker UI for screenshots...", LogType.Info);
-
-            var cwFormType = CWForm.GetType();
-
-            // Close tools panel for cleaner screenshots
-            var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (toolsPanelField?.GetValue(CWForm) is System.Windows.Forms.Control toolsPanel)
-            {
-                if (toolsPanel.Visible)
-                {
-                    toolsPanel.Visible = false;
-                    LogHelper.Log("Tools panel closed for cleaner screenshots", LogType.Info);
-                }
-            }
-
-            // Enable "Selected Drawable Only" for better focus
-            var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (onlySelectedField?.GetValue(CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
-            {
-                if (!onlySelectedCheckBox.Checked)
-                {
-                    onlySelectedCheckBox.Checked = true;
-                    LogHelper.Log("'Selected Drawable Only' enabled for focused screenshots", LogType.Info);
-                }
-            }
-
-            // Hide console panel if visible for cleaner screenshots
-            var consolePanelField = cwFormType.GetField("ConsolePanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (consolePanelField?.GetValue(CWForm) is System.Windows.Forms.Control consolePanel)
-            {
-                if (consolePanel.Visible)
-                {
-                    consolePanel.Visible = false;
-                    LogHelper.Log("Console panel hidden for cleaner screenshots", LogType.Info);
-                }
-            }
-
-            LogHelper.Log("CodeWalker UI optimization completed", LogType.Info);
+            return;
         }
-        catch (Exception ex)
+        var cwFormType = CWForm.GetType();
+
+        // Close tools panel for cleaner screenshots
+        var toolsPanelField = cwFormType.GetField("ToolsPanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (toolsPanelField?.GetValue(CWForm) is System.Windows.Forms.Control toolsPanel)
         {
-            LogHelper.Log($"Failed to optimize CodeWalker UI: {ex.Message}", LogType.Warning);
+            toolsPanel.Visible = false;
+        }
+
+        // Enable "Selected Drawable Only" for better focus if native is false
+        var onlySelectedField = cwFormType.GetField("OnlySelectedCheckBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (onlySelectedField?.GetValue(CWForm) is System.Windows.Forms.CheckBox onlySelectedCheckBox)
+        {
+            onlySelectedCheckBox.Checked = !native;
+        }
+
+        // Hide console panel if visible for cleaner screenshots
+        var consolePanelField = cwFormType.GetField("ConsolePanel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (consolePanelField?.GetValue(CWForm) is System.Windows.Forms.Control consolePanel)
+        {
+            consolePanel.Visible = false;
         }
     }
 
@@ -397,10 +373,10 @@ public static class CWHelper
             string outputResolution = SettingsHelper.Instance.OutputResolution ?? "128x128";
             
             // Set the render resolution for the window
-            SetRenderResolution(renderResolution);
+            // SetRenderResolution(renderResolution);
             
             // Automatically optimize CodeWalker UI for screenshots
-            OptimizeCodeWalkerForScreenshots();
+            // OptimizeCodeWalkerForScreenshots();  //it was already optimized before screenshot process started
             
             string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string defaultScreenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
@@ -418,26 +394,27 @@ public static class CWHelper
             System.Threading.Thread.Sleep(50);
             
             // Use the enhanced alpha mask screenshot method with resolution support
-            bool success;
+            bool success = false;
             if (useAlphaMask)
             {
                 LogHelper.Log("Using alpha mask screenshot method with resolution support", LogType.Info);
                 success = CWForm.TakeGDIScreenshotWithAlphaMask(fullFilePath, drawableName, true, renderResolution, outputResolution);
             }
-            else
-            {
-                LogHelper.Log("Using direct blue removal method", LogType.Info);
-                success = CWForm.TakeGDIScreenshot(fullFilePath);
+            // else
+            // {
+            //     LogHelper.Log("Using direct blue removal method", LogType.Info);
+            //     Thread.Sleep(2000);
+            //     success = CWForm.TakeGDIScreenshot(fullFilePath);
                 
-                // Apply output resolution scaling if needed
-                if (success && !string.IsNullOrEmpty(outputResolution))
-                {
-                    ApplyOutputResolutionScaling(fullFilePath, outputResolution);
-                }
-            }
+            //     // Apply output resolution scaling if needed
+            //     if (success && !string.IsNullOrEmpty(outputResolution))
+            //     {
+            //         ApplyOutputResolutionScaling(fullFilePath, outputResolution);
+            //     }
+            // }
             
             // Restore original window size
-            RestoreOriginalResolution();
+            // RestoreOriginalResolution();
             
             LogHelper.Log($"Screenshot method completed, result: {success}", LogType.Info);
             

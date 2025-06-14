@@ -723,7 +723,15 @@ namespace grzyClothTool.Controls
             }
 
             // Show category selection dialog
-            var includedCategories = ShowCategorySelectionDialog();
+            var dialog = new CategorySelectionDialog();
+            dialog.Title = "Select Categories for Screenshots";
+            var result = dialog.ShowDialog();
+            
+            List<string> includedCategories = null;
+            if (result == true)
+            {
+                includedCategories = dialog.IncludedCategories;
+            }
             if (includedCategories == null || includedCategories.Count == 0)
             {
                 return; // User cancelled or no categories selected
@@ -765,8 +773,8 @@ namespace grzyClothTool.Controls
                          "Each texture variation will be captured automatically.\n\n" +
                          "Do you want to continue?";
 
-            var result = CustomMessageBox.Show(message, "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.YesNo);
-            if (result != CustomMessageBox.CustomMessageBoxResult.Yes)
+            var confirmationResult = CustomMessageBox.Show(message, "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.YesNo);
+            if (confirmationResult != CustomMessageBox.CustomMessageBoxResult.Yes)
                 return;
 
             try
@@ -925,20 +933,6 @@ namespace grzyClothTool.Controls
             }
         }
 
-        private List<string> ShowCategorySelectionDialog()
-        {
-            var dialog = new CategorySelectionDialog();
-            dialog.Title = "Select Categories for Screenshots";
-            var result = dialog.ShowDialog();
-            
-            if (result == true)
-            {
-                return dialog.IncludedCategories;
-            }
-            
-            return null; // User cancelled
-        }
-
         private bool ShouldIncludeCategory(GDrawable drawable, List<string> includedCategories)
         {
             if (drawable.IsProp && includedCategories.Contains("props"))
@@ -949,81 +943,6 @@ namespace grzyClothTool.Controls
 
             return false;
         }
-
-
-
-        private bool TakeCoreScreenshot(string drawableName, string customFilename)
-        {
-            try
-            {
-                if (CWHelper.CWForm == null || CWHelper.CWForm.IsDisposed || !CWHelper.CWForm.formopen)
-                {
-                    return false;
-                }
-
-                // Create screenshot directory if it doesn't exist
-                string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                string screenshotDir = Path.Combine(documentsPath, "grzyClothTool", "Screenshots");
-                Directory.CreateDirectory(screenshotDir);
-
-                // Generate full file path
-                string fileName = customFilename;
-                if (!fileName.EndsWith(".png"))
-                {
-                    fileName += ".png";
-                }
-                string filePath = Path.Combine(screenshotDir, fileName);
-
-                // Brief delay for UI stability with GDI capture
-                System.Threading.Thread.Sleep(25);
-
-                // Call ONLY the absolute core capture method - ProcessTransparentScreenshotData
-                var cwFormType = CWHelper.CWForm.GetType();
-                
-                // Use the simple GDI screenshot method
-                return CWHelper.TakeScreenshot(drawableName, customFilename);
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Core screenshot failed: {ex.Message}", LogType.Error);
-                return false;
-            }
-        }
-
-                private bool CaptureBackbufferDirectly(string filePath, object renderer)
-        {
-            try
-            {
-                // SIMPLE APPROACH: Just call regular screenshot method since we already setup CodeWalker
-                // The setup was done once, so this should work without restoration messages
-                return CWHelper.TakeScreenshot("temp", System.IO.Path.GetFileName(filePath));
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Simple screenshot capture failed: {ex.Message}", LogType.Error);
-                return false;
-            }
-        }
-
-        private bool SaveBackbufferAsPng(object backBuffer, string filePath, object context)
-        {
-            try
-            {
-                // This is getting very complex for direct D3D11 texture saving
-                // Let's use a simpler approach - just save what's currently rendered
-                
-                // For now, let's just return false and use a different approach
-                LogHelper.Log("Direct backbuffer saving not implemented", LogType.Warning);
-                return false;
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Backbuffer save failed: {ex.Message}", LogType.Error);
-                return false;
-            }
-        }
-
-
 
 
 
