@@ -40,6 +40,9 @@ namespace grzyClothTool.Models
         private string SavedAt => DateTime.Now.ToString("dd-MM-yyyy HH:mm:ss");
 
         [JsonIgnore]
+        public bool HasProject => Addons.Count > 0;
+
+        [JsonIgnore]
         public ObservableCollection<MoveMenuItem> MoveMenuItems { get; set; } = [];
 
         private ObservableCollection<Addon> _addons = [];

@@ -37,6 +37,17 @@ public class NavigationHelper : INotifyPropertyChanged
         }
     }
 
+    private string _previousPage;
+    public string PreviousPage
+    {
+        get { return _previousPage; }
+        set
+        {
+            _previousPage = value;
+            OnPropertyChanged(nameof(PreviousPage));
+        }
+    }
+
     public NavigationHelper()
     {
         CurrentPage = new ProjectWindow();
@@ -59,13 +70,47 @@ public class NavigationHelper : INotifyPropertyChanged
     {
         if (_pageFactories.TryGetValue(pageKey, out var pageFactory))
         {
+            // Store the current page as previous before navigating
+            if (_currentPage != null)
+            {
+                // Find the key for the current page
+                foreach (var kvp in _pages)
+                {
+                    if (kvp.Value == _currentPage)
+                    {
+                        // Only update PreviousPage if we're not navigating to the same page
+                        if (kvp.Key != pageKey)
+                        {
+                            PreviousPage = kvp.Key;
+                        }
+                        break;
+                    }
+                }
+            }
+
             if (!_pages.TryGetValue(pageKey, out UserControl page))
             {
                 page = pageFactory.Invoke();
                 _pages.Add(pageKey, page);
             }
 
+            // Update the current page before setting content
+            CurrentPage = page;
             MainWindow.Instance.MainWindowContentControl.Content = page;
+        }
+    }
+
+    public void NavigateBack()
+    {
+        // If there's a previous page, navigate to it
+        if (!string.IsNullOrEmpty(PreviousPage))
+        {
+            Navigate(PreviousPage);
+        }
+        else
+        {
+            // Fallback to Home if no previous page is stored
+            Navigate("Home");
         }
     }
 }

@@ -203,7 +203,17 @@ namespace grzyClothTool.Views
 
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {
-            MainWindow.NavigationHelper.Navigate("Home");
+            // Check if a project is loaded
+            if (MainWindow.AddonManager.HasProject)
+            {
+                // If a project is loaded, navigate to the Project page
+                MainWindow.NavigationHelper.Navigate("Project");
+            }
+            else
+            {
+                // If no project is loaded, navigate back to the previous page or Home
+                MainWindow.NavigationHelper.NavigateBack();
+            }
         }
 
         private void GTAVPath_Click(object sender, RoutedEventArgs e)
