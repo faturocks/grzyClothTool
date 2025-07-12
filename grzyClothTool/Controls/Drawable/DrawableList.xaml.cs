@@ -690,7 +690,7 @@ namespace grzyClothTool.Controls
                     });
 
                     // Brief wait for preview to update (GDI is faster)
-                    await Task.Delay(50);
+                    await Task.Delay(10); // Reduced from 50ms to 10ms
 
                     // Generate filename with the specified format
                     string filename = $"{genderCode}_{selectedDrawable.TypeNumeric}_{gameIdString}_{i}.png";

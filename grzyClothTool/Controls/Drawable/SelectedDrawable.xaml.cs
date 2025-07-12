@@ -659,7 +659,7 @@ namespace grzyClothTool.Controls
 
             // Wait for the file to exist with polling
             int elapsedMs = 0;
-            const int pollIntervalMs = 100; // Increased poll interval
+            const int pollIntervalMs = 25; // Reduced from 100ms to 25ms for faster polling
             int fileCheckAttempts = 0;
 
             while (elapsedMs < timeoutMs)
@@ -830,8 +830,8 @@ namespace grzyClothTool.Controls
                     CWHelper.ClearAlphaMaskCache();
                     LogHelper.Log("Cleared alpha mask cache before gender switch", LogType.Info);
                     
-                    // Longer delay to allow the ped model to load properly and stabilize
-                    await Task.Delay(500);
+                    // Brief delay to allow the ped model to load properly and stabilize
+                    await Task.Delay(100); // Reduced from 500ms to 100ms
                     LogHelper.Log($"Ped model updated to {currentGender}", LogType.Info);
                     
                     // Re-optimize CodeWalker after gender switch to ensure proper state
@@ -903,7 +903,7 @@ namespace grzyClothTool.Controls
                                     }
                                     
                                     // Brief wait for texture to load
-                                    await Task.Delay(25);
+                                    await Task.Delay(10); // Reduced from 25ms to 10ms
 
                                     // Generate filename with the specified format
                                     string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
@@ -932,7 +932,7 @@ namespace grzyClothTool.Controls
                             }
 
                             // Brief delay between drawables
-                            await Task.Delay(25);
+                            await Task.Delay(10); // Reduced from 25ms to 10ms
 
                             // Clean up memory for the previous drawable before moving to next one
                             CleanupDrawableMemory(drawable);
