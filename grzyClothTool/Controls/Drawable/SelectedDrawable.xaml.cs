@@ -765,12 +765,19 @@ namespace grzyClothTool.Controls
                 return;
             }
 
+            // Group drawables by gender to process all drawables of one gender across all addons first
+            var drawablesByGender = drawablesToScreenshot
+                .GroupBy(d => d.Sex)
+                .OrderBy(g => g.Key) // Process male first, then female
+                .ToList();
+
             // Calculate total screenshots that will be taken
             int totalScreenshots = drawablesToScreenshot.Sum(d => d.Textures.Count);
 
             var message = $"This will take {totalScreenshots} screenshot(s) from {drawablesToScreenshot.Count} drawable(s).\n\n" +
                          "Included categories: " + string.Join(", ", includedCategories) + "\n\n" +
                          "Each texture variation will be captured automatically.\n\n" +
+                         "Processing order: All drawables of one gender across all addons, then switch to other gender.\n\n" +
                          "Do you want to continue?";
 
             var confirmationResult = CustomMessageBox.Show(message, "Take All Screenshots", CustomMessageBox.CustomMessageBoxButtons.YesNo);
@@ -799,126 +806,147 @@ namespace grzyClothTool.Controls
                 
                 int successCount = 0;
                 int totalCount = 0;
-                Enums.SexType? currentGender = null; // Track current gender to detect changes
 
-                foreach (var drawable in drawablesToScreenshot)
+                // Process drawables by gender groups
+                foreach (var genderGroup in drawablesByGender)
                 {
-                    try
+                    var currentGender = genderGroup.Key;
+                    LogHelper.Log($"Starting to process {genderGroup.Count()} drawables for gender: {currentGender}", LogType.Info);
+                    
+                    // Set the appropriate ped model for the current gender
+                    CWHelper.SetPedModel(currentGender);
+                    LogHelper.Log($"Ped model set to {currentGender}", LogType.Info);
+                    
+                    // Clear any loaded drawables before switching gender to prevent conflicts
+                    if (CWHelper.CWForm.LoadedDrawables.Count > 0)
                     {
-                        // Check if gender has changed and update ped model accordingly
-                        if (currentGender != drawable.Sex)
+                        CWHelper.CWForm.LoadedTextures.Clear();
+                        CWHelper.CWForm.LoadedDrawables.Clear();
+                        CWHelper.CWForm.Refresh();
+                        LogHelper.Log("Cleared loaded drawables before gender switch", LogType.Info);
+                    }
+                    
+                    // Clear alpha mask cache to prevent cross-gender contamination
+                    CWHelper.ClearAlphaMaskCache();
+                    LogHelper.Log("Cleared alpha mask cache before gender switch", LogType.Info);
+                    
+                    // Longer delay to allow the ped model to load properly and stabilize
+                    await Task.Delay(500);
+                    LogHelper.Log($"Ped model updated to {currentGender}", LogType.Info);
+                    
+                    // Re-optimize CodeWalker after gender switch to ensure proper state
+                    CWHelper.OptimizeCodeWalkerForScreenshots();
+
+                    // Process all drawables of the current gender
+                    foreach (var drawable in genderGroup)
+                    {
+                        try
                         {
-                            LogHelper.Log($"Gender change detected: switching from {currentGender?.ToString() ?? "none"} to {drawable.Sex}", LogType.Info);
-                            
-                            // Clear any loaded drawables before switching gender to prevent conflicts
-                            if (CWHelper.CWForm.LoadedDrawables.Count > 0)
+                            // Find the addon that contains this drawable and temporarily set it as SelectedAddon
+                            // This ensures DisplayNumberWithOffset calculates the correct game ID
+                            var originalSelectedAddon = MainWindow.AddonManager.SelectedAddon;
+                            var drawableAddon = MainWindow.AddonManager.Addons.FirstOrDefault(a => a.Drawables.Contains(drawable));
+                            if (drawableAddon != null)
                             {
-                                CWHelper.CWForm.LoadedTextures.Clear();
-                                CWHelper.CWForm.LoadedDrawables.Clear();
-                                CWHelper.CWForm.Refresh();
-                                LogHelper.Log("Cleared loaded drawables before gender switch", LogType.Info);
+                                MainWindow.AddonManager.SelectedAddon = drawableAddon;
+                                LogHelper.Log($"Set SelectedAddon to '{drawableAddon.Name}' for drawable '{drawable.Name}'", LogType.Info);
                             }
-                            
-                            // Clear alpha mask cache to prevent cross-gender contamination
-                            CWHelper.ClearAlphaMaskCache();
-                            LogHelper.Log("Cleared alpha mask cache before gender switch", LogType.Info);
-                            
-                            // Set the appropriate ped model for the new gender
-                            CWHelper.SetPedModel(drawable.Sex);
-                            currentGender = drawable.Sex;
-                            
-                            // Longer delay to allow the ped model to load properly and stabilize
-                            await Task.Delay(500);
-                            LogHelper.Log($"Ped model updated to {drawable.Sex}", LogType.Info);
-                            
-                            // Re-optimize CodeWalker after gender switch to ensure proper state
-                            CWHelper.OptimizeCodeWalkerForScreenshots();
-                        }
-
-                        string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
-                        string gameIdString = drawable.DisplayNumberWithOffset;
-
-                        for (int i = 0; i < drawable.Textures.Count; i++)
-                        {
-                            var texture = drawable.Textures[i];
-                            totalCount++;
-
-                            try
+                            else
                             {
-                                // Update the preview to show current texture
-                                MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
-                                
-                                // Load the texture into the drawable
-                                bool isNewDrawable = false;
-                                if (texture != null)
+                                LogHelper.Log($"Warning: Could not find addon for drawable '{drawable.Name}'", LogType.Warning);
+                            }
+
+                            string genderCode = drawable.Sex == Enums.SexType.male ? "M" : "F";
+                            string gameIdString = drawable.DisplayNumberWithOffset;
+                            LogHelper.Log($"Drawable '{drawable.Name}' from addon '{drawableAddon?.Name}' has game ID: {gameIdString}", LogType.Info);
+
+                            for (int i = 0; i < drawable.Textures.Count; i++)
+                            {
+                                var texture = drawable.Textures[i];
+                                totalCount++;
+
+                                try
                                 {
-                                    // Check if the drawable exists in LoadedDrawables before accessing it
-                                    if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
+                                    // Update the preview to show current texture
+                                    MainWindow.AddonManager.SelectedAddon.SelectedTexture = texture;
+                                    
+                                    // Load the texture into the drawable
+                                    bool isNewDrawable = false;
+                                    if (texture != null)
                                     {
-                                        // If drawable is not loaded, load it first
-                                        var ydd = CWHelper.CreateYddFile(drawable);
-                                        if (ydd != null && ydd.Drawables.Length > 0)
+                                        // Check if the drawable exists in LoadedDrawables before accessing it
+                                        if (!CWHelper.CWForm.LoadedDrawables.ContainsKey(drawable.Name))
                                         {
-                                            CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
-                                            isNewDrawable = true; // Mark as new drawable for auto-focus
+                                            // If drawable is not loaded, load it first
+                                            var ydd = CWHelper.CreateYddFile(drawable);
+                                            if (ydd != null && ydd.Drawables.Length > 0)
+                                            {
+                                                CWHelper.CWForm.LoadedDrawables[drawable.Name] = ydd.Drawables.First();
+                                                isNewDrawable = true; // Mark as new drawable for auto-focus
+                                            }
+                                            else
+                                            {
+                                                continue; // Skip this texture if drawable can't be loaded
+                                            }
                                         }
-                                        else
-                                        {
-                                            continue; // Skip this texture if drawable can't be loaded
-                                        }
+
+                                        var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
+                                        var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
+                                        CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
+                                        CWHelper.CWForm.Refresh();
                                     }
+                                    
+                                    // Auto-focus camera when a new drawable is loaded (cloth changes, not texture variation)
+                                    if (isNewDrawable)
+                                    {
+                                        CWHelper.AutoFocusCamera(drawable.Name);
+                                    }
+                                    
+                                    // Brief wait for texture to load
+                                    await Task.Delay(25);
 
-                                    var ytd = CWHelper.CreateYtdFile(texture, texture.DisplayName);
-                                    var cwydd = CWHelper.CWForm.LoadedDrawables[drawable.Name];
-                                    CWHelper.CWForm.LoadedTextures[cwydd] = ytd.TextureDict;
-                                    CWHelper.CWForm.Refresh();
+                                    // Generate filename with the specified format
+                                    string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
+
+                                    // Take screenshot using GDI method
+                                    bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
+                                    LogHelper.Log($"Screenshot method returned: {success} for {filename}", LogType.Info);
+
+                                    // Always check if file was actually created, regardless of return value
+                                    // The TakeScreenshot method has fallback logic that may create files even when returning false
+                                    bool fileSaved = await WaitForScreenshotFile(filename);
+                                    if (fileSaved)
+                                    {
+                                        successCount++;
+                                        LogHelper.Log($"Screenshot file successfully saved: {filename}", LogType.Info);
+                                    }
+                                    else
+                                    {
+                                        LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
+                                    }
                                 }
-                                
-                                // Auto-focus camera when a new drawable is loaded (cloth changes, not texture variation)
-                                if (isNewDrawable)
+                                catch (Exception ex)
                                 {
-                                    CWHelper.AutoFocusCamera(drawable.Name);
-                                }
-                                
-                                // Brief wait for texture to load
-                                await Task.Delay(25);
-
-                                // Generate filename with the specified format
-                                string filename = $"{genderCode}_{drawable.TypeNumeric}_{gameIdString}_{i}.png";
-
-                                // Take screenshot using GDI method
-                                bool success = CWHelper.TakeScreenshot(drawable.Name, filename);
-                                LogHelper.Log($"Screenshot method returned: {success} for {filename}", LogType.Info);
-
-                                // Always check if file was actually created, regardless of return value
-                                // The TakeScreenshot method has fallback logic that may create files even when returning false
-                                bool fileSaved = await WaitForScreenshotFile(filename);
-                                if (fileSaved)
-                                {
-                                    successCount++;
-                                    LogHelper.Log($"Screenshot file successfully saved: {filename}", LogType.Info);
-                                }
-                                else
-                                {
-                                    LogHelper.Log($"Screenshot file {filename} was not saved within timeout period", LogType.Warning);
+                                    LogHelper.Log($"Error taking screenshot: {ex.Message}", LogType.Error);
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                LogHelper.Log($"Error taking screenshot: {ex.Message}", LogType.Error);
-                            }
+
+                            // Brief delay between drawables
+                            await Task.Delay(25);
+
+                            // Clean up memory for the previous drawable before moving to next one
+                            CleanupDrawableMemory(drawable);
+
+                            // Restore the original SelectedAddon
+                            MainWindow.AddonManager.SelectedAddon = originalSelectedAddon;
                         }
-
-                        // Brief delay between drawables
-                        await Task.Delay(25);
-
-                        // Clean up memory for the previous drawable before moving to next one
-                        CleanupDrawableMemory(drawable);
+                        catch (Exception ex)
+                        {
+                            LogHelper.Log($"Error processing drawable: {ex.Message}", LogType.Error);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        LogHelper.Log($"Error processing drawable: {ex.Message}", LogType.Error);
-                    }
+                    
+                    LogHelper.Log($"Completed processing {genderGroup.Count()} drawables for gender: {currentGender}", LogType.Info);
                 }
 
                 CustomMessageBox.Show($"Successfully captured {successCount} out of {totalCount} screenshot(s).", 
