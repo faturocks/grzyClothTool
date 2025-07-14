@@ -436,6 +436,56 @@ namespace grzyClothTool.Controls
 
                 if (droppedData != null && target != null && ItemsSource != null)
                 {
+                    // Check if this is a cross-category move (prop to component or vice versa)
+                    if (droppedData.IsProp != target.IsProp)
+                    {
+                        // Show confirmation dialog for cross-category move
+                        var categoryChange = droppedData.IsProp ? "prop to component" : "component to prop";
+                        var currentCategory = droppedData.IsProp ? "Prop" : "Component";
+                        var targetCategory = target.IsProp ? "Prop" : "Component";
+                        var result = MessageBox.Show(
+                            $"This will convert the drawable from {categoryChange}.\n\n" +
+                            $"Current: {droppedData.TypeName} ({currentCategory})\n" +
+                            $"Target: {target.TypeName} ({targetCategory})\n\n" +
+                            "Do you want to continue?",
+                            "Convert Drawable Category",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Question);
+
+                        if (result == MessageBoxResult.Yes)
+                        {
+                            // Convert the drawable to the target category and type
+                            droppedData.ChangeDrawableCategory(target.TypeName, target.IsProp);
+                            
+                            // Find the new position after conversion
+                            var convertedDrawable = ItemsSource.FirstOrDefault(d => 
+                                d.FilePath == droppedData.FilePath && 
+                                d.IsProp == target.IsProp && 
+                                d.TypeNumeric == target.TypeNumeric);
+                            
+                            if (convertedDrawable != null)
+                            {
+                                // Move to the target position within the same category
+                                var targetIndex = ItemsSource.IndexOf(target);
+                                var currentIndex = ItemsSource.IndexOf(convertedDrawable);
+                                
+                                if (currentIndex != targetIndex)
+                                {
+                                    ItemsSource.Move(currentIndex, targetIndex);
+                                    MainWindow.AddonManager.SelectedAddon.Drawables.ReassignNumbers(convertedDrawable);
+                                    
+                                    MyListBox.SelectedItem = convertedDrawable;
+                                    MyListBox.ScrollIntoView(convertedDrawable);
+                                }
+                            }
+                        }
+                        
+                        _adornerLayer?.Remove(_ghostLineAdorner);
+                        _ghostLineAdorner = null;
+                        return;
+                    }
+
+                    // Original logic for same-category moves
                     if (droppedData.Sex != target.Sex || droppedData.TypeNumeric != target.TypeNumeric || droppedData.IsProp != target.IsProp)
                     {
                         return;
@@ -738,6 +788,92 @@ namespace grzyClothTool.Controls
             catch (Exception ex)
             {
                 CustomMessageBox.Show($"Error focusing camera: {ex.Message}", "Error", CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+        }
+
+        private void ConvertCategory_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedDrawables = MyListBox.SelectedItems.Cast<GDrawable>().ToList();
+            if (selectedDrawables.Count == 0) return;
+
+            // For multiple selection, we'll convert all to the same category
+            // For single selection, we'll show a dialog to choose the target category
+            if (selectedDrawables.Count == 1)
+            {
+                ShowCategoryConversionDialog(selectedDrawables[0]);
+            }
+            else
+            {
+                ShowBulkCategoryConversionDialog(selectedDrawables);
+            }
+        }
+
+        private void ShowCategoryConversionDialog(GDrawable drawable)
+        {
+            var currentCategory = drawable.IsProp ? "Prop" : "Component";
+            var targetCategory = drawable.IsProp ? "Component" : "Prop";
+            
+            var result = MessageBox.Show(
+                $"Convert '{drawable.Name}' from {currentCategory} to {targetCategory}?\n\n" +
+                $"This will change the drawable category and you'll need to select a new type.",
+                "Convert Drawable Category",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                ShowTypeSelectionDialog(drawable, !drawable.IsProp);
+            }
+        }
+
+        private void ShowBulkCategoryConversionDialog(List<GDrawable> drawables)
+        {
+            var currentCategory = drawables[0].IsProp ? "Prop" : "Component";
+            var targetCategory = drawables[0].IsProp ? "Component" : "Prop";
+            
+            var result = MessageBox.Show(
+                $"Convert {drawables.Count} drawable(s) from {currentCategory} to {targetCategory}?\n\n" +
+                $"This will change the drawable categories and you'll need to select new types.",
+                "Convert Drawable Categories",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                ShowBulkTypeSelectionDialog(drawables, !drawables[0].IsProp);
+            }
+        }
+
+        private void ShowTypeSelectionDialog(GDrawable drawable, bool newIsProp)
+        {
+            var availableTypes = newIsProp ? EnumHelper.GetPropTypeList() : EnumHelper.GetDrawableTypeList();
+            var categoryName = newIsProp ? "Prop" : "Component";
+            
+            // Create a simple type selection dialog
+            var dialog = new TypeSelectionDialog(availableTypes, $"Select {categoryName} Type for '{drawable.Name}'");
+            
+            var result = dialog.ShowDialog();
+            if (result == true && dialog.SelectedType != null)
+            {
+                drawable.ChangeDrawableCategory(dialog.SelectedType, newIsProp);
+            }
+        }
+
+        private void ShowBulkTypeSelectionDialog(List<GDrawable> drawables, bool newIsProp)
+        {
+            var availableTypes = newIsProp ? EnumHelper.GetPropTypeList() : EnumHelper.GetDrawableTypeList();
+            var categoryName = newIsProp ? "Prop" : "Component";
+            
+            // Create a simple type selection dialog
+            var dialog = new TypeSelectionDialog(availableTypes, $"Select {categoryName} Type for {drawables.Count} Drawable(s)");
+            
+            var result = dialog.ShowDialog();
+            if (result == true && dialog.SelectedType != null)
+            {
+                foreach (var drawable in drawables)
+                {
+                    drawable.ChangeDrawableCategory(dialog.SelectedType, newIsProp);
+                }
             }
         }
     }

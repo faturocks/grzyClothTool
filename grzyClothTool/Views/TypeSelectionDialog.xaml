@@ -1,0 +1,24 @@
+<Window x:Class="grzyClothTool.Views.TypeSelectionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Select Type" Height="300" Width="400"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <TextBlock Grid.Row="0" Text="Please select a type:" Margin="0,0,0,10" FontWeight="Bold"/>
+        
+        <ListBox Grid.Row="1" x:Name="TypeListBox" SelectionMode="Single" Margin="0,0,0,10"/>
+        
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="OKButton" Content="OK" Width="75" Height="25" Margin="0,0,10,0" Click="OK_Click"/>
+            <Button x:Name="CancelButton" Content="Cancel" Width="75" Height="25" Click="Cancel_Click"/>
+        </StackPanel>
+    </Grid>
+</Window> 

@@ -16,6 +16,7 @@
             <MenuItem Header="Optimize textures" Click="OptimizeDrawableTextures_Click" />
             <MenuItem Header="Delete" Click="DeleteDrawable_Click" />
             <MenuItem Header="Replace" Click="ReplaceDrawable_Click" />
+            <MenuItem Header="Convert Category" Click="ConvertCategory_Click" />
             <MenuItem Header="Move" ItemsSource="{Binding AddonManager.MoveMenuItems, RelativeSource={RelativeSource AncestorType=Window}}">
                 <MenuItem.ItemContainerStyle>
                     <Style TargetType="MenuItem">
@@ -38,6 +39,7 @@
         <ContextMenu x:Key="MultipleSelectionContextMenu">
             <MenuItem Header="Optimize textures" Click="OptimizeDrawableTextures_Click" />
             <MenuItem Header="Delete" Click="DeleteDrawable_Click" />
+            <MenuItem Header="Convert Category" Click="ConvertCategory_Click" />
             <MenuItem Header="Move" ItemsSource="{Binding AddonManager.MoveMenuItems, RelativeSource={RelativeSource AncestorType=Window}}">
                 <MenuItem.ItemContainerStyle>
                     <Style TargetType="MenuItem">

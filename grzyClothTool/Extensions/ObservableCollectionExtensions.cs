@@ -30,7 +30,13 @@ public static class ObservableCollectionExtensions
     {
         int counter = 0;
 
-        foreach (var item in drawables.Where(x => x.IsProp == drawable.IsProp && x.Sex == drawable.Sex && x.TypeNumeric == drawable.TypeNumeric))
+        // Get drawables of the same type and sex, ordered by their current position in the collection
+        var sameTypeDrawables = drawables
+            .Where(x => x.IsProp == drawable.IsProp && x.Sex == drawable.Sex && x.TypeNumeric == drawable.TypeNumeric)
+            .ToList();
+
+        // Reassign numbers based on their current order in the collection
+        foreach (var item in sameTypeDrawables)
         {
             item.Number = counter++;
             item.SetDrawableName();

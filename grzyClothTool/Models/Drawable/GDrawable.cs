@@ -67,7 +67,7 @@ public class GDrawable : INotifyPropertyChanged
     public virtual bool IsReserved => false;
 
     public int TypeNumeric { get; set; }
-    private string _typeName;
+    private string? _typeName;
     public string TypeName
     {
         get
@@ -434,6 +434,63 @@ public class GDrawable : INotifyPropertyChanged
         // re-add changed drawable
         MainWindow.AddonManager.AddDrawable(this);
         MainWindow.AddonManager.Addons.Sort(true);
+    }
+
+    public void ChangeDrawableType(string newType, bool newIsProp)
+    {
+        // If changing between prop and component, we need to handle the conversion
+        if (IsProp != newIsProp)
+        {
+            ChangeDrawableCategory(newType, newIsProp);
+            return;
+        }
+
+        // Otherwise, use the existing logic for same-category type changes
+        ChangeDrawableType(newType);
+    }
+
+    public void ChangeDrawableCategory(string newType, bool newIsProp)
+    {
+        var newTypeNumeric = EnumHelper.GetValue(newType, newIsProp);
+        var reserved = new GDrawableReserved(Sex, IsProp, TypeNumeric, Number);
+        var index = MainWindow.AddonManager.SelectedAddon.Drawables.IndexOf(this);
+
+        // Store original values for logging
+        var oldIsProp = IsProp;
+        var oldTypeName = TypeName;
+
+        // change drawable to new category and type
+        IsProp = newIsProp;
+        TypeNumeric = newTypeNumeric;
+
+        // Clear cached type name so it gets recalculated with new IsProp value
+        _typeName = null;
+
+        // Notify property changes for UI binding
+        OnPropertyChanged(nameof(TypeName));
+        OnPropertyChanged(nameof(AvailableTypes));
+        OnPropertyChanged(nameof(IsComponent));
+
+        // Update textures to reflect the new category
+        foreach (var texture in Textures)
+        {
+            texture.IsProp = newIsProp;
+            texture.TypeNumeric = newTypeNumeric;
+        }
+
+        // Update the drawable name with the new type
+        SetDrawableName();
+
+        // replace drawable with reserved in the same place
+        MainWindow.AddonManager.SelectedAddon.Drawables[index] = reserved;
+
+        // re-add changed drawable
+        MainWindow.AddonManager.AddDrawable(this);
+        MainWindow.AddonManager.Addons.Sort(true);
+
+        // Log the category change
+        var categoryChange = oldIsProp ? "prop to component" : "component to prop";
+        LogHelper.Log($"Drawable '{Name}' converted from {categoryChange}: {oldTypeName} -> {newType}", Views.LogType.Info);
     }
 
     public void ChangeDrawableSex(string newSex)

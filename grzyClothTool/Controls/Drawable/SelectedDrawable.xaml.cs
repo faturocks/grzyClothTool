@@ -599,48 +599,65 @@ namespace grzyClothTool.Controls
 
             var drawables = MainWindow.AddonManager.SelectedAddon.Drawables;
             int oldIndex = drawables.IndexOf(drawable);
-            int newIndex = -1;
-
-            // Find the target index based on the new position
-            for (int i = 0; i < drawables.Count; i++)
+            
+            // Get all drawables of the same type and sex as the current drawable
+            var sameTypeDrawables = drawables
+                .Where(d => d.IsProp == drawable.IsProp && d.Sex == drawable.Sex && d.TypeNumeric == drawable.TypeNumeric)
+                .OrderBy(d => d.Number)
+                .ToList();
+            
+            // Find the current drawable's position within its type/sex group
+            int currentPositionInGroup = sameTypeDrawables.IndexOf(drawable);
+            
+            // Validate the new position
+            if (newPosition < 0 || newPosition >= sameTypeDrawables.Count)
             {
-                if (drawables[i].Number == newPosition)
-                {
-                    newIndex = i;
-                    break;
-                }
-            }
-
-            if (newIndex == -1 || newIndex == oldIndex)
-            {
-                // Reset to original value if position not found or no change
+                // Reset to original value if position is out of range
                 textBox.Text = drawable.Number.ToString();
                 return;
             }
-
+            
+            // If the position hasn't changed, do nothing
+            if (newPosition == currentPositionInGroup)
+            {
+                textBox.Text = drawable.Number.ToString();
+                return;
+            }
+            
+            // Calculate the target index in the main drawables collection
+            int targetIndex = -1;
+            int sameTypeCount = 0;
+            
+            for (int i = 0; i < drawables.Count; i++)
+            {
+                if (drawables[i].IsProp == drawable.IsProp && drawables[i].Sex == drawable.Sex && drawables[i].TypeNumeric == drawable.TypeNumeric)
+                {
+                    if (sameTypeCount == newPosition)
+                    {
+                        targetIndex = i;
+                        break;
+                    }
+                    sameTypeCount++;
+                }
+            }
+            
+            if (targetIndex == -1)
+            {
+                // Reset to original value if target position not found
+                textBox.Text = drawable.Number.ToString();
+                return;
+            }
+            
             int oldPosition = drawable.Number;
-
-            // Move the drawable using the same logic as drag and drop
-            if (oldIndex < newIndex)
-            {
-                for (int i = oldIndex; i < newIndex; i++)
-                {
-                    (drawables[i + 1], drawables[i]) = (drawables[i], drawables[i + 1]);
-                }
-            }
-            else
-            {
-                for (int i = oldIndex; i > newIndex; i--)
-                {
-                    (drawables[i - 1], drawables[i]) = (drawables[i], drawables[i - 1]);
-                }
-            }
-
+            
+            // Move the drawable to the target position
+            drawables.Move(oldIndex, targetIndex);
+            
+            // Reassign numbers to maintain sequential ordering
+            drawables.ReassignNumbers(drawable);
+            
             // Log the movement
             LogHelper.Log($"Drawable '{drawable.Name}' moved from position {oldPosition} to {newPosition}");
-            
-            // Reassign numbers using the same method as drag and drop
-            drawables.ReassignNumbers(drawable);
             
             // Update the TextBox to show the correct position
             textBox.Text = drawable.Number.ToString();
